@@ -22,9 +22,9 @@ class Client():
         if not server_ready.wait(timeout=5):
             print(f"{self} Error : Server hasn't started on time.")
             return
-        self.sock.connect((self.host, self.port))
+        # self.sock.connect((self.host, self.port))
         self.is_running = True
-        threading.Thread(target=self._listen, daemon=True).start()
+        # threading.Thread(target=self._listen, daemon=True).start()
 
     def _listen(self):
         try:
@@ -44,7 +44,8 @@ class Client():
         try:
             message = {
                 "action": "message",
-                "payload": msg
+                "payload": msg,
+                "clientname": self.name
                 }
             packet = (json.dumps(message) + "\n").encode('utf-8')
             self.sock.sendall(packet)
@@ -59,7 +60,9 @@ class Client():
 
         header = {
             "action": "write",
-            "size": os.path.getsize(path)
+            "size": os.path.getsize(path),
+            "clientname": self.name,
+            "filename": os.path.basename(path)
         }
         header_packet = json.dumps(header).encode('utf-8')
         self.sock.sendall(header_packet)
@@ -70,7 +73,32 @@ class Client():
                 if not chunk:
                     break
                 self.sock.sendall(chunk)
-        
+        print(f"{self} has sent the write request !")
+
+    def send_list(self):
+        message = {
+            "action": "list",
+            "clientname": self.name
+        }
+        # Send once
+        self.sock.sendall(json.dumps(message).encode('utf-8'))
+        # Block the client, waiting for the response of the server.
+        try:
+            while self.is_running:
+                data = self.sock.recv(1024)
+                if not data:
+                    break
+                file_list = json.loads(data.decode('utf-8'))
+                if len(file_list) == 0:
+                    print(f"{self} has no file stored in the database.")
+                    return
+                else:
+                    for file in file_list:
+                        print(f"{self}: {file}")
+                    return
+        except OSError:
+            pass
+
 
     def stop(self):
         print(f"{self} is disconnecting...")

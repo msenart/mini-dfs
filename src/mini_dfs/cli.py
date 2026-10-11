@@ -93,7 +93,20 @@ class CLI(cmd.Cmd):
                 actor.send_write(path)
                 break
 
+    def do_lsf(self, args):
+        """
+        Lists all files that a user has in the database. Usage: lsf <client-name>
+        """
+        client_name = args
+        for client in self.clients:
+            if client.name == client_name:
+                client.send_list()
+                break
+
     def do_ls(self, args=None):
+        """
+        Lists all the entities that are in the simulation. Usage: ls
+        """
         for client in self.clients:
             print(client)
         print(self.nameserver)
