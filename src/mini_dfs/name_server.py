@@ -17,8 +17,8 @@ class NameServer():
         self.server_sock = None
         self.lut = dict()
         self.lut_lock:threading.Lock=threading.Lock()
-        self.chunk_servers_socks = []
-        self.chunk_servers_socks_lock:threading.Lock=threading.Lock()
+        self.chunk_servers_conns = []
+        self.chunk_servers_conns_lock:threading.Lock=threading.Lock()
         self.is_running = False
 
     def __str__(self):
@@ -67,87 +67,76 @@ class NameServer():
 
     def _listen_server(self, server_sock, server_addr):
         conn = utils.QueueConn(server_sock)
-        with self.chunk_servers_socks_lock:
-            self.chunk_servers_socks.append(server_sock)
+        with self.chunk_servers_conns_lock:
+            self.chunk_servers_conns.append(conn)
         try:
             with server_sock:
-                while self.is_running:
-                    try:
-                        req = json.loads(utils.recv_data(server_sock, bytes=False))
-                    except ConnectionResetError:
-                        break
-                    if conn.dispatch_response(req):
-                        continue                     # it was a reply to a request()
-                    match req["action"]:
-                        case "message":
-                            self.process_message_request(req, conn)
-                        case _:
-                            print(f"{self} unknown request: {req}")
+                conn.listen(lambda req: self._handle_server_msg(req, conn), lambda: self.is_running)
         finally:
-            with self.chunk_servers_socks_lock:
-                self.chunk_servers_socks.remove(conn)
-            conn.close_all_pending()
-    
-    def _listen_client(self, client_conn, client_addr):
-        with client_conn:
-            while self.is_running:
-                try:
-                    req = json.loads(utils.recv_data(client_conn,bytes=False))
-                    match req["action"]:
-                        case "message":
-                            self.process_message_request(req, client_conn)
-                        case "allocate":
-                            self.process_allocate_request(req,client_conn)
-                        case "list":
-                            self.process_list_request(req,client_conn)
-                        case _:
-                            print(f"{self} has received an unknown request: {req}")
-                except ConnectionResetError:
-                    break
+            with self.chunk_servers_conns_lock:
+                self.chunk_servers_conns.remove(conn)
 
-    def getall_storage(self):
+    def _handle_server_msg(self, req, conn: utils.QueueConn):
+        match req.get("action"):
+            case "message":
+                self.process_message_request(req, conn)
+            case _:
+                print(f"{self} unknown request: {req}")
+
+    def _listen_client(self, client_sock, client_addr):
+        conn = utils.QueueConn(client_sock)
+        with client_sock:
+            conn.listen(lambda req: self._handle_client_msg(req, conn), lambda: self.is_running)
+
+    def _handle_client_msg(self, req, conn: utils.QueueConn):
+        match req.get("action"):
+            case "message":
+                self.process_message_request(req, conn)
+            case "allocate":
+                self.process_allocate_request(req, conn)
+            case "list":
+                self.process_list_request(req, conn)
+            case _:
+                print(f"{self} has received an unknown request: {req}")
+
+    def getall_storage(self, conns: list[utils.QueueConn]):
         out = []
-        for i, conn in enumerate(self.chunk_servers_socks):
-            utils.send_data(conn, {"action":"storage"})
-            response = json.loads(utils.recv_data(conn, bytes=False))
-            if response["action"] == "storage":
-                out.append(int(response["memory"]))
-            else:
-                print(f"{self} has received an unknown response: {response}")
+        for conn in conns:
+            response = conn.request({"action":"storage"})
+            out.append(int(response["memory"]))
         return out
 
-    def send_message(self, conn, msg):
-        packet = {
-            "action":"message",
-            "payload":msg
-        }
-        utils.send_data(conn, json.dumps(packet))
-
-    def process_message_request(self, req, client_conn):
+    def process_message_request(self, req, client_conn: utils.QueueConn):
         print(f"{self} Received from {req["clientname"]}: {req["payload"]}")
 
-    def process_list_request(self, req, client_conn):
+    def process_list_request(self, req, client_conn: utils.QueueConn):
         client_name = req["clientname"]
         filenames = []
         if client_name in self.lut:
             filenames = list(self.lut[client_name].keys())
-        utils.send_data(client_conn, {
-            "action":"list",
-            "filenames":filenames
-            })
-    
-    def process_allocate_request(self, req, client_conn):
+        client_conn.reply(req, {"action":"list", "filenames":filenames})
+
+    def process_allocate_request(self, req, client_conn: utils.QueueConn):
         client_name, chunk_number, filename = req["clientname"], req["chunk_number"], req["filename"]
         print(f"{self} received an allocation request of {chunk_number} chunks")
-        
+
         # if the file already exists, return
-        with self.lut_lock:    
+        with self.lut_lock:
             if filename in self.lut.get(client_name, {}):
-                self.send_message(client_conn, f"{filename} already exists in the database!")
+                client_conn.reply(req, {"status": "nok", "message": f"{filename} already exists in the database!"})
                 return
 
         # find the best chunk configuration according to the servers storage
-        memories = self.getall_storage()
+        with self.chunk_servers_conns_lock:
+            conns = list(self.chunk_servers_conns)  # snapshot: indices must stay consistent below
+        if not conns:
+            client_conn.reply(req, {"status": "nok", "message": "no chunk server available!"})
+            return
+        try:
+            memories = self.getall_storage(conns)
+        except (ConnectionError, queue.Empty):
+            client_conn.reply(req, {"status": "nok", "message": "a chunk server didn't answer!"})
+            return
         servers_number = min(len(memories), N_REPLICAS)
         assigned_servers = []
         for _ in range(chunk_number):
@@ -157,24 +146,26 @@ class NameServer():
                 memories[j] += 1
 
         if max(memories) > MAX_N_CHUNK_SERVER:
-            self.send_message(client_conn, f"{filename} couldn't be written: not enough space!")
+            client_conn.reply(req, {"status": "nok", "message": f"{filename} couldn't be written: not enough space!"})
             return
 
         # proceed chunk allocation and remember where the chunks are as for replicas.
         chunks = []
-        for chosen in assigned_servers:
-            replicas = []
-            for j in chosen:
-                sock = self.chunk_servers_socks[j]
-                utils.send_data(sock, json.dumps({"action": "allocate"}).encode())
-                response = json.loads(utils.recv_data(sock, bytes=False))
-                if response.get("status") != "ok":
-                    raise MemoryError(f"the server {j} couldn't allocate enough memory!")
-                host, port = response["client_host"], response["client_port"]
-                replicas.append({"host":host, "port":port, "file_index":response["file_index"]})
-            chunks.append(replicas)
+        try:
+            for chosen in assigned_servers:
+                replicas = []
+                for j in chosen:
+                    response = conns[j].request({"action": "allocate"})
+                    if response.get("status") != "ok":
+                        raise MemoryError(f"the server {j} couldn't allocate enough memory!")
+                    host, port = response["client_host"], response["client_port"]
+                    replicas.append({"host":host, "port":port, "file_index":response["file_index"]})
+                chunks.append(replicas)
+        except (MemoryError, ConnectionError, queue.Empty) as e:
+            client_conn.reply(req, {"status": "nok", "message": f"{filename} couldn't be written: {e}"})
+            return
 
         with self.lut_lock:
             self.lut.setdefault(client_name, {})[filename] = {"chunk_handles": chunks}
 
-        self.send_message(client_conn, {"status": "ok", "chunks": chunks})
+        client_conn.reply(req, {"status": "ok", "chunks": chunks})

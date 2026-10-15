@@ -34,20 +34,51 @@ def recv_exact(sock : socket.socket, n : int) -> bytearray:
     return buf
 
 def recv_data(sock : socket.socket, bytes):
-    data_size = struct.unpack(">I",sock.recv(4))[0]
+    data_size = struct.unpack(">I", recv_exact(sock, 4))[0]
     if bytes == True:
         return recv_exact(sock, data_size)
     else :
         return recv_exact(sock, data_size).decode('utf-8')
 
 class QueueConn:
-    """Wraps one chunkserver socket, implementing queueing."""
+    """Wraps one socket shared by a listener thread and requesting threads."""
     def __init__(self, sock):
         self.sock = sock
         self.send_lock = threading.Lock()
         self.pending = {}                       # request_id -> queue.Queue
         self.pending_lock = threading.Lock()
         self.ids = itertools.count()
+
+    def send(self, payload):
+        with self.send_lock:
+            send_data(self.sock, payload)
+
+    def close(self):
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.sock.close()
+
+    def reply(self, req, payload):
+        """Answers req, echoing its request_id so the peer's request() gets it."""
+        self.send({**payload, "request_id": req.get("request_id")})
+
+    def listen(self, handler, is_running=lambda: True):
+        """
+        Single reader of the socket: routes responses to the waiting request()
+        and passes every other message to handler(msg). Returns when the connection is lost.
+        """
+        try:
+            while is_running():
+                msg = json.loads(recv_data(self.sock, bytes=False))
+                if self.dispatch_response(msg):
+                    continue
+                handler(msg)
+        except (OSError, struct.error):     # ConnectionError is an OSError
+            pass
+        finally:
+            self.close_all_pending()
 
     def request(self, payload, timeout=5):
         rid = next(self.ids)

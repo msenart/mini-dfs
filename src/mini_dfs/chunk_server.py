@@ -13,7 +13,7 @@ class ChunkServer():
     def __init__(self, name = "chunk-server", host = HOST, port = None):
         self.name = name
         self.host = host
-        self.nameserver_sock = None
+        self.nameserver_conn = None
         self.nameserver_port = port
         self.client_sock = None
         self.is_running = False
@@ -26,10 +26,11 @@ class ChunkServer():
         if os.path.exists(self.name): ## Clears the whole storage before starting another session.
             rmtree(self.name)
         os.makedirs(self.name, exist_ok=True)
-        self.nameserver_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        nameserver_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if self.nameserver_port == None:
             print(f"{self} hasn't any bound port yet !")
-        self.nameserver_sock.connect((self.host, self.nameserver_port))
+        nameserver_sock.connect((self.host, self.nameserver_port))
+        self.nameserver_conn = utils.QueueConn(nameserver_sock)
         self.is_running = True
         threading.Thread(target=self._listen_nameserver, daemon=True).start()
         
@@ -41,22 +42,22 @@ class ChunkServer():
     def stop(self):
         print(f"{self} is disconnecting...")
         self.is_running = False
-        if self.nameserver_sock:
-            try:
-                self.nameserver_sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            self.nameserver_sock.close()
+        if self.nameserver_conn:
+            self.nameserver_conn.close()
+        if self.client_sock:
+            self.client_sock.close()
 
     def _listen_nameserver(self):
-        while self.is_running:
-            req = utils.recv_data(self.nameserver_sock, bytes=False)
-            req = json.loads(req)
-            match req["action"]:
-                case "storage":
-                    self.process_storage_request(req)
-                case "allocate":
-                    self.process_allocate_request(req)
+        self.nameserver_conn.listen(self._handle_nameserver_msg, lambda: self.is_running)
+
+    def _handle_nameserver_msg(self, req):
+        match req.get("action"):
+            case "storage":
+                self.process_storage_request(req)
+            case "allocate":
+                self.process_allocate_request(req)
+            case _:
+                print(f"{self} unknown request: {req}")
 
     def _accept_clients(self):
         while self.is_running:
@@ -67,23 +68,18 @@ class ChunkServer():
                 break
 
     def _listen_client(self, client_conn, client_addr):
-        client_conn.settimeout(1.0)
+        # no socket timeout: it could fire mid-frame and desynchronize the stream
         with client_conn:
             while self.is_running:
                 try:
-                    data = utils.recv_data(client_conn, bytes=False)
-                except socket.timeout:
-                    continue
-                except (ConnectionResetError, BrokenPipeError):
+                    req = json.loads(utils.recv_data(client_conn, bytes=False))
+                    action = req["action"]
+                    if action == "write":
+                        self.process_write_request(client_conn, req)
+                    else:
+                        self.send_message(client_conn, f"unknown action : {action}")
+                except OSError:     # includes ConnectionError
                     break
-                if not data:
-                    break
-                req = json.loads(data)
-                action = req["action"]
-                if action == "write":
-                    self.process_write_request(client_conn, req)
-                else:
-                    self.send_message(client_conn, f"unknown action : {action}")
 
     def send_message(self, conn, msg):
         req = {
@@ -92,11 +88,11 @@ class ChunkServer():
         }
         utils.send_data(conn, req)
 
-    def process_allocate_request(self, conn, req):
+    def process_allocate_request(self, req):
         with self.dir_lock:
             os.makedirs(self.name, exist_ok=True)
             if len(os.listdir(self.name)) > MAX_N_CHUNK_SERVER: ## If no more place in servers
-                utils.send_data(conn, {"status": "nok"})
+                self.nameserver_conn.reply(req, {"status": "nok"})
                 return
             used = {
                 int(f[:-4])
@@ -105,19 +101,19 @@ class ChunkServer():
             }
             index = min(set(range(len(used) + 1)) - used)
             open(os.path.join(self.name, f"{index}.bin"), "wb").close()
-        client_host, client_port = self.client_sock.getsockname()
-        utils.send_data(conn, {"status": "ok", "client_host": client_host, "client_port": client_port,"index": index})
+        client_host, client_port = self.host, self.client_sock.getsockname()[1]  # getsockname() host is 0.0.0.0 (bind address)
+        self.nameserver_conn.reply(req, {"status": "ok", "client_host": client_host, "client_port": client_port, "file_index": index})
 
     def process_storage_request(self, req):
         response = {
             "action":"storage",
             "memory":sum(1 for filename in os.listdir(self.name) if filename[-4:] == ".bin")
         }
-        utils.send_data(self.nameserver_sock,response)
+        self.nameserver_conn.reply(req, response)
 
     def process_write_request(self, conn, req):
         file_index = req["file_index"]
-        data = utils.recv_data(self.nameserver_sock, bytes=True)
+        data = utils.recv_data(conn, bytes=True)
         with open(os.path.join(self.name,f"{file_index}.bin"), "r+b") as file:
             file.write(data)
         utils.send_data(conn, {"status":"ok"})
