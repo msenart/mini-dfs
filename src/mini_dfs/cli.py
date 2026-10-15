@@ -82,6 +82,8 @@ class CLI(cmd.Cmd):
         """
         for client in self.clients:
             client.stop()
+        for chunkserver in self.chunkservers:
+            chunkserver.stop()
         self.nameserver.stop()
 
     def do_message(self, args):
@@ -90,6 +92,7 @@ class CLI(cmd.Cmd):
         """
         if (len(args.split()) < 2):
             print("do_client_send: Not enough arguments to unpack.")
+            return
 
         actor_name, msg = args.split(" ",1)
         for actor in self.clients:
@@ -103,6 +106,7 @@ class CLI(cmd.Cmd):
         """
         if (len(args.split()) < 2):
             print("do_client_send: Not enough arguments to unpack.")
+            return
 
         actor_name, path = args.split(" ",1)
         for actor in self.clients:
@@ -132,6 +136,9 @@ class CLI(cmd.Cmd):
 
     def do_macro(self, args=None):
         self.do_create_chunkserver("datadog")
+        self.do_create_chunkserver("datadog2")
+        self.do_create_chunkserver("datadog3")
+        self.do_create_chunkserver("datadog4")
         self.do_create_client("shrek")
         self.do_create_nameserver("caca")
         self.do_startall(None)

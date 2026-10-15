@@ -3,6 +3,7 @@ import threading
 import json
 import os
 from shutil import rmtree
+import hashlib
 
 from mini_dfs.globals import *
 import mini_dfs.utils as utils
@@ -23,9 +24,10 @@ class ChunkServer():
         return f"[ChunkServer {self.name}, {self.host}, {self.nameserver_port}]"
 
     def start(self):
-        if os.path.exists(self.name): ## Clears the whole storage before starting another session.
-            rmtree(self.name)
         os.makedirs(self.name, exist_ok=True)
+        with open(os.path.join(self.name, "checksum.txt"), "w") as file:
+            for i in range(MAX_N_CHUNK_SERVER):
+                file.write("\n")
         nameserver_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if self.nameserver_port == None:
             print(f"{self} hasn't any bound port yet !")
@@ -42,6 +44,8 @@ class ChunkServer():
     def stop(self):
         print(f"{self} is disconnecting...")
         self.is_running = False
+        if os.path.exists(self.name): ## Clears the whole storage before starting another session.
+            rmtree(self.name)
         if self.nameserver_conn:
             self.nameserver_conn.close()
         if self.client_sock:
@@ -114,6 +118,14 @@ class ChunkServer():
     def process_write_request(self, conn, req):
         file_index = req["file_index"]
         data = utils.recv_data(conn, bytes=True)
+        # write chunk
         with open(os.path.join(self.name,f"{file_index}.bin"), "r+b") as file:
             file.write(data)
+
+        # write its checksum in the checksum.txt
+        with open(os.path.join(self.name,f"checksum.txt"), "r") as checksum_file:
+            checksums = checksum_file.readlines()
+        checksums[file_index] = hashlib.md5(data).hexdigest()
+        with open(os.path.join(self.name,f"checksum.txt"), "w") as checksum_file:
+            checksum_file.writelines(checksums)
         utils.send_data(conn, {"status":"ok"})

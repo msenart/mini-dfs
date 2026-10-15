@@ -1,7 +1,6 @@
 import socket
 import threading
 import json
-import hashlib
 import itertools, queue, threading
 import mini_dfs.utils as utils
 from mini_dfs.globals import *
