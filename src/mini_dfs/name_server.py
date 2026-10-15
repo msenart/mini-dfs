@@ -7,7 +7,7 @@ from mini_dfs.globals import *
 
 
 class NameServer():
-    def __init__(self, name = "name-server", host=HOST, client_port=CLIENT_PORT, server_port=CHUNK_SERVER_PORT):
+    def __init__(self, name = "name-server", host=BIND_HOST, client_port=CLIENT_PORT, server_port=CHUNK_SERVER_PORT):
         self.name = name
         self.host = host
         self.client_port = client_port

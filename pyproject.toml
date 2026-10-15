@@ -7,12 +7,10 @@ authors = [
     { name = "Mathieu SENART", email = "50012951+msenart@users.noreply.github.com" }
 ]
 requires-python = ">=3.13"
-dependencies = [
-    "argparse>=1.4.0",
-]
+dependencies = []
 
 [project.scripts]
-mini-dfs = "mini_dfs:main"
+mini-dfs = "mini_dfs.__main__:main"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

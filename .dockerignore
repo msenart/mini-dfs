@@ -1,0 +1,6 @@
+.venv
+.git
+tests
+*.pdf
+__pycache__
+*.bin

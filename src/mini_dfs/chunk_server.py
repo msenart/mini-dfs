@@ -8,12 +8,12 @@ import hashlib
 from mini_dfs.globals import *
 import mini_dfs.utils as utils
 
-HOST = 'localhost'
-
 class ChunkServer():
-    def __init__(self, name = "chunk-server", host = HOST, port = None):
+    def __init__(self, name = "chunk-server", host = NAMESERVER_HOST, port = None, advertise_host = None, client_port = CHUNK_CLIENT_PORT):
         self.name = name
-        self.host = host
+        self.host = host    # name server address
+        self.advertise_host = advertise_host or ADVERTISE_HOST or host    # address given to clients
+        self.client_port = client_port
         self.nameserver_conn = None
         self.nameserver_port = port
         self.client_sock = None
@@ -31,13 +31,14 @@ class ChunkServer():
         nameserver_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if self.nameserver_port == None:
             print(f"{self} hasn't any bound port yet !")
-        nameserver_sock.connect((self.host, self.nameserver_port))
+        utils.connect_with_retry(nameserver_sock, (self.host, self.nameserver_port))
         self.nameserver_conn = utils.QueueConn(nameserver_sock)
         self.is_running = True
         threading.Thread(target=self._listen_nameserver, daemon=True).start()
         
         self.client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.client_sock.bind(("0.0.0.0", 0))
+        self.client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.client_sock.bind(("0.0.0.0", self.client_port))
         self.client_sock.listen()
         threading.Thread(target=self._accept_clients, daemon=True).start()
 
@@ -80,7 +81,7 @@ class ChunkServer():
                     action = req["action"]
                     if action == "write":
                         self.process_write_request(client_conn, req)
-                    if action == "read":
+                    elif action == "read":
                         self.process_read_request(client_conn, req)
                     else:
                         self.send_message(client_conn, f"unknown action : {action}")
@@ -107,7 +108,7 @@ class ChunkServer():
             }
             index = min(set(range(len(used) + 1)) - used)
             open(os.path.join(self.name, f"{index}.bin"), "wb").close()
-        client_host, client_port = self.host, self.client_sock.getsockname()[1]  # getsockname() host is 0.0.0.0 (bind address)
+        client_host, client_port = self.advertise_host, self.client_sock.getsockname()[1]  # getsockname() host is 0.0.0.0 (bind address)
         self.nameserver_conn.reply(req, {"status": "ok", "client_host": client_host, "client_port": client_port, "file_index": index})
 
     def process_storage_request(self, req):

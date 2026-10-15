@@ -3,13 +3,24 @@ import json
 import base64
 import socket
 import struct
-import itertools, queue, threading
+import itertools, queue, threading, time
 
 from mini_dfs.globals import CHUNK_SIZE
 
 def argsort(l : list, reverse=False):
     indices = sorted(range(len(l)), key=l.__getitem__, reverse=reverse)
     return indices
+
+def connect_with_retry(sock : socket.socket, address, attempts=30, delay=1.0) -> None:
+    """Connects the socket, retrying while the peer isn't up yet (containers start in any order)."""
+    for attempt in range(attempts):
+        try:
+            sock.connect(address)
+            return
+        except (ConnectionRefusedError, socket.gaierror):
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
 
 # send/receive data packets the right way
 

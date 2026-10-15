@@ -1,3 +1,4 @@
 *.bin
 *.txt
 *.pyc
+__pycache__/
