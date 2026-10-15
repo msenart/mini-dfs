@@ -80,6 +80,8 @@ class ChunkServer():
                     action = req["action"]
                     if action == "write":
                         self.process_write_request(client_conn, req)
+                    if action == "read":
+                        self.process_read_request(client_conn, req)
                     else:
                         self.send_message(client_conn, f"unknown action : {action}")
                 except OSError:     # includes ConnectionError
@@ -115,7 +117,7 @@ class ChunkServer():
         }
         self.nameserver_conn.reply(req, response)
 
-    def process_write_request(self, conn, req):
+    def process_write_request(self, conn:utils.QueueConn, req):
         file_index = req["file_index"]
         data = utils.recv_data(conn, bytes=True)
         # write chunk
@@ -129,3 +131,14 @@ class ChunkServer():
         with open(os.path.join(self.name,f"checksum.txt"), "w") as checksum_file:
             checksum_file.writelines(checksums)
         utils.send_data(conn, {"status":"ok"})
+
+    def process_read_request(self, conn:socket.socket, req):
+        file_index = req["file_index"]
+        filenames = [int(filename[:-4]) for filename in os.listdir(self.name) if filename != 'checksum.txt']
+        if file_index not in filenames:
+            utils.send_data(conn, {'status':'nok', 'payload':'did not find a chunk from the stored file...'})
+            return
+        with open(os.path.join(self.name, str(file_index)+'.bin'), 'rb') as file:
+            chunk = file.read()
+        utils.send_data(conn, {'status':'ok'})
+        utils.send_data(conn, chunk)

@@ -1,11 +1,12 @@
 import argparse
 import cmd
 import atexit
+import os
 
 from mini_dfs.client import Client
 from mini_dfs.name_server import NameServer
 from mini_dfs.chunk_server import ChunkServer
-from mini_dfs.globals import CLIENT_PORT, CHUNK_SERVER_PORT
+from mini_dfs.globals import *
 
 class CLI(cmd.Cmd):
     intro = 'Welcome to the Cmd.   Type help or ? to list commands.\n'
@@ -27,7 +28,8 @@ class CLI(cmd.Cmd):
 
     def do_create_client(self, args):
         """
-        Creates a client instance. Usage: create-client <client-name>. 
+        Creates a client instance.
+        Usage: create-client <client-name>. 
         """
         if (len(args.split()) != 1):
             print("Not enough arguments to unpack.")
@@ -39,7 +41,9 @@ class CLI(cmd.Cmd):
 
     def do_create_nameserver(self, args):
         """
-        Creates a nameserver instance. Call the command twice overwrites the previous nameserver. Usage: create-nameserver <nameserver-name>
+        Creates a nameserver instance.
+        Call the command twice overwrites the previous nameserver. 
+        Usage: create-nameserver <nameserver-name>
         """
         if (len(args.split()) != 1):
             print("Not enough arguments to unpack.")
@@ -50,7 +54,8 @@ class CLI(cmd.Cmd):
 
     def do_create_chunkserver(self, args):
         """
-        Creates a chunkserver instance. Usage: create-chunkserver <chunkserver-name>
+        Creates a chunkserver instance.
+        Usage: create-chunkserver <chunkserver-name>
         """
         if (len(args.split()) != 1):
             print("Not enough arguments to unpack.")
@@ -88,7 +93,8 @@ class CLI(cmd.Cmd):
 
     def do_message(self, args):
         """
-        Send message from the client <name> to the nameserver. Usage: send <client-name> <request>
+        Send message from the client <name> to the nameserver.
+        Usage: send <client-name> <request>
         """
         if (len(args.split()) < 2):
             print("do_client_send: Not enough arguments to unpack.")
@@ -102,7 +108,8 @@ class CLI(cmd.Cmd):
 
     def do_write(self, args):
         """
-        Send a write request from the client <name> to the nameserver. Usage: write <client-name> <path-to-file>
+        Writes the <path-to-file> file into the database.
+        Usage: write <client-name> <path-to-file>
         """
         if (len(args.split()) < 2):
             print("do_client_send: Not enough arguments to unpack.")
@@ -114,9 +121,26 @@ class CLI(cmd.Cmd):
                 actor.send_write(path)
                 break
 
+    def do_read(self, args):
+        """
+        Reads an existing file named <filename> from the database.
+        Usage: read <client-name> <filename>
+        """
+        if (len(args.split()) < 2):
+            print("do_client_send: Not enough arguments to unpack.")
+            return
+
+        actor_name, path = args.split(" ",1)
+        filename = os.path.basename(path)
+        for actor in self.clients:
+            if actor.name == actor_name:
+                actor.send_read(filename)
+                break
+    
     def do_lsf(self, args):
         """
-        Lists all files that a user has in the database. Usage: lsf <client-name>
+        Lists all files that a user has in the database.
+        Usage: lsf <client-name>
         """
         client_name = args
         for client in self.clients:

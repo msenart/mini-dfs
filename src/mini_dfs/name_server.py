@@ -95,6 +95,8 @@ class NameServer():
                 self.process_allocate_request(req, conn)
             case "list":
                 self.process_list_request(req, conn)
+            case "read":
+                self.process_read_request(req, conn)
             case _:
                 print(f"{self} has received an unknown request: {req}")
 
@@ -114,6 +116,13 @@ class NameServer():
         if client_name in self.lut:
             filenames = list(self.lut[client_name].keys())
         client_conn.reply(req, {"action":"list", "filenames":filenames})
+
+    def process_read_request(self, req, conn: utils.QueueConn):
+        clientname, filename = req['clientname'], req['filename']
+        if (filename not in self.lut[clientname]):      # We suppose clientname is always in the lut.
+            conn.reply(req, {"status":"nok", "payload":"no such filename found in the database !"})
+            return
+        conn.reply(req, {"status":"ok", "payload":self.lut[clientname][filename]["chunk_handles"]})
 
     def process_allocate_request(self, req, client_conn: utils.QueueConn):
         client_name, chunk_number, filename = req["clientname"], req["chunk_number"], req["filename"]

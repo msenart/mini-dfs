@@ -104,7 +104,43 @@ class Client():
                     response = json.loads(utils.recv_data(chunkserver_sock, bytes=False))
                     if response["status"] != "ok":
                         raise BrokenPipeError(f"the server {host}:{port} couldn't write the chunk !")
-        ## TODO: there is a performance problem : the socket creation is in the loop ! multiple socket creations...
+
+    def send_read(self, filename):
+        req = {
+            'action': 'read',
+            'filename': filename,
+            'clientname': self.name
+        }
+        response = self.conn.request(req)
+        if response["status"] != "ok":
+            print(response["payload"])
+            return
+        chunks_mds = response["payload"]
+        chunks_data = []
+        for chunk_mds in chunks_mds:
+            for chunk_md in chunk_mds:
+                host, port, file_index = chunk_md['host'], chunk_md['port'], chunk_md['file_index']
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as chunkserver_sock:
+                        chunkserver_sock.settimeout(3)
+                        chunkserver_sock.connect((host, port))
+                        req = {
+                            "action":"read",
+                            "file_index":file_index
+                        }
+                        utils.send_data(chunkserver_sock, req)
+                        response2 = json.loads(utils.recv_data(chunkserver_sock, bytes=False))
+                        if response2["status"] != "ok":
+                            print(response2["payload"])
+                            continue
+                        chunks_data.append(utils.recv_data(chunkserver_sock, bytes=True))
+                        break ## exit the loop when succeeded to get the data from one chunk
+                except ConnectionError as ex:
+                    print(f"{self}: lost connection! : {ex}")
+                    continue
+        
+                    
+        print(b''.join(chunks_data))
 
 
     def send_list(self):
