@@ -126,15 +126,15 @@ class CLI(cmd.Cmd):
         Reads an existing file named <filename> from the database.
         Usage: read <client-name> <filename>
         """
-        if (len(args.split()) < 2):
+        if len(args.split()) != 4:
             print("do_client_send: Not enough arguments to unpack.")
             return
-
-        actor_name, path = args.split(" ",1)
+            
+        actor_name, path, offset_begin, offset_end = args.split()
         filename = os.path.basename(path)
         for actor in self.clients:
             if actor.name == actor_name:
-                actor.send_read(filename)
+                actor.send_read(filename, int(offset_begin), int(offset_end))
                 break
     
     def do_lsf(self, args):

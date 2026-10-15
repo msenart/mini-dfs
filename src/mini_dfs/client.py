@@ -2,7 +2,7 @@ import socket
 import threading
 import os
 
-from mini_dfs.globals import HOST, CHUNK_SIZE
+from mini_dfs.globals import *
 import mini_dfs.utils as utils
 
 import json
@@ -105,7 +105,7 @@ class Client():
                     if response["status"] != "ok":
                         raise BrokenPipeError(f"the server {host}:{port} couldn't write the chunk !")
 
-    def send_read(self, filename):
+    def send_read(self, filename, offset_begin=0, offset_end=0):
         req = {
             'action': 'read',
             'filename': filename,
@@ -116,6 +116,15 @@ class Client():
             print(response["payload"])
             return
         chunks_mds = response["payload"]
+
+        if offset_end == -1:
+            index_begin = offset_begin//CHUNK_SIZE
+            chunks_mds = chunks_mds[index_begin:]
+        elif offset_end >= 0 and (offset_begin < offset_end):
+            index_begin = offset_begin//CHUNK_SIZE
+            index_end   = (offset_end//CHUNK_SIZE)+1
+            chunks_mds = chunks_mds[index_begin:index_end]
+
         chunks_data = []
         for chunk_mds in chunks_mds:
             for chunk_md in chunk_mds:
@@ -139,8 +148,10 @@ class Client():
                     print(f"{self}: lost connection! : {ex}")
                     continue
         
-                    
-        print(b''.join(chunks_data))
+        result = b''.join(chunks_data)
+        chunk_difference = offset_end//CHUNK_SIZE - offset_begin//CHUNK_SIZE
+        result = result[offset_begin%CHUNK_SIZE:chunk_difference*CHUNK_SIZE+offset_end%CHUNK_SIZE]
+        print(result)
 
 
     def send_list(self):
