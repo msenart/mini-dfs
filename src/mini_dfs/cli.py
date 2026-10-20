@@ -70,7 +70,7 @@ class CLI(cmd.Cmd):
         """
         # bind all ports from clients and chunkservers to name server port.
         for client in self.clients:
-            client.port = self.nameserver.client_port
+            client.nameserver_port = self.nameserver.client_port
         for chunkserver in self.chunkservers:
             chunkserver.nameserver_port = self.nameserver.server_port
         print("All clients and chunkservers have been bound to the nameserver !")
@@ -123,8 +123,10 @@ class CLI(cmd.Cmd):
 
     def do_read(self, args):
         """
-        Reads an existing file named <filename> from the database.
-        Usage: read <client-name> <filename>
+        Prints an existing file named <filename> from the database into the terminal.
+        Usage: read <client-name> <filename> <offset-begin> <offset-end>
+        <offset-begin> is in [0, +inf)
+        <offset-end> is in [0, +inf). If =-1, prints from <offset-begin> to end of file.
         """
         if len(args.split()) != 4:
             print("do_client_send: Not enough arguments to unpack.")
@@ -159,6 +161,9 @@ class CLI(cmd.Cmd):
         print(self.nameserver)
 
     def do_macro(self, args=None):
+        """
+        Builds automatically a configuration for those who are lazy. Check the configuration is live using command ls.
+        """
         self.do_create_chunkserver("datadog")
         self.do_create_chunkserver("datadog2")
         self.do_create_chunkserver("datadog3")

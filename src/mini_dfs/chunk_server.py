@@ -9,13 +9,13 @@ from mini_dfs.globals import *
 import mini_dfs.utils as utils
 
 class ChunkServer():
-    def __init__(self, name = "chunk-server", host = NAMESERVER_HOST, port = None, advertise_host = None, client_port = CHUNK_CLIENT_PORT):
+    def __init__(self, name = "chunk-server", host = NAMESERVER_HOST, nameserver_port = None, advertise_host = None, client_port = CHUNK_CLIENT_PORT):
         self.name = name
         self.host = host    # name server address
         self.advertise_host = advertise_host or ADVERTISE_HOST or host    # address given to clients
         self.client_port = client_port
         self.nameserver_conn = None
-        self.nameserver_port = port
+        self.nameserver_port = nameserver_port
         self.client_sock = None
         self.is_running = False
         self.dir_lock:threading.Lock=threading.Lock()

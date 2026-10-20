@@ -7,21 +7,21 @@ import mini_dfs.utils as utils
 
 import json
 class Client():
-    def __init__(self, name = "client", host = NAMESERVER_HOST, port = None):
+    def __init__(self, name = "client", host = NAMESERVER_HOST, nameserver_port = None):
         self.name = name
         self.host = host
-        self.port = port
+        self.nameserver_port = nameserver_port
         self.conn = None
         self.is_running = False
 
     def __str__(self):
-        return f"[Client {self.name}, {self.host}, {self.port}]"
+        return f"[Client {self.name}, {self.host}, {self.nameserver_port}]"
 
     def start(self):        
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if self.port == None:
+        if self.nameserver_port == None:
             print(f"{self} hasn't any bound port yet !")
-        utils.connect_with_retry(sock, (self.host, self.port))
+        utils.connect_with_retry(sock, (self.host, self.nameserver_port))
         self.conn = utils.QueueConn(sock)
         self.is_running = True
         threading.Thread(target=self.conn.listen, args=(self._listen, lambda: self.is_running), daemon=True).start()
