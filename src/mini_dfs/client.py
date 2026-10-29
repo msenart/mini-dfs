@@ -1,6 +1,7 @@
 import socket
 import threading
 import os
+from shutil import rmtree
 
 from mini_dfs.globals import *
 import mini_dfs.utils as utils
@@ -13,11 +14,14 @@ class Client():
         self.nameserver_port = nameserver_port
         self.conn = None
         self.is_running = False
+        self.storage_dir = os.path.join("storage", self.name)
 
     def __str__(self):
         return f"[Client {self.name}, {self.host}, {self.nameserver_port}]"
 
-    def start(self):        
+    def start(self):
+        if not os.path.exists(self.storage_dir):
+            os.makedirs(self.storage_dir)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if self.nameserver_port == None:
             print(f"{self} hasn't any bound port yet !")
@@ -29,6 +33,8 @@ class Client():
     def stop(self):
         print(f"{self} is disconnecting...")
         self.is_running = False
+        if os.path.exists(self.storage_dir): ## Clears the whole storage before starting another session.
+            rmtree(self.storage_dir)
         if self.conn:
             self.conn.close()
 
@@ -125,33 +131,45 @@ class Client():
             index_end   = (offset_end//CHUNK_SIZE)+1
             chunks_mds = chunks_mds[index_begin:index_end]
 
-        chunks_data = []
-        for chunk_mds in chunks_mds:
-            for chunk_md in chunk_mds:
-                host, port, file_index = chunk_md['host'], chunk_md['port'], chunk_md['file_index']
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as chunkserver_sock:
-                        chunkserver_sock.settimeout(3)
-                        chunkserver_sock.connect((host, port))
-                        req = {
-                            "action":"read",
-                            "file_index":file_index
-                        }
-                        utils.send_data(chunkserver_sock, req)
-                        response2 = json.loads(utils.recv_data(chunkserver_sock, bytes=False))
-                        if response2["status"] != "ok":
-                            print(response2["payload"])
+        out_path = os.path.join(self.storage_dir, os.path.basename(filename))
+
+        last = len(chunks_mds) - 1
+        try:
+            with open(out_path, "wb") as out_file:
+                for i, chunk_mds in enumerate(chunks_mds):
+                    data = None
+                    for chunk_md in chunk_mds:
+                        host, port, file_index = chunk_md['host'], chunk_md['port'], chunk_md['file_index']
+                        try:
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as chunkserver_sock:
+                                chunkserver_sock.settimeout(3)
+                                chunkserver_sock.connect((host, port))
+                                utils.send_data(chunkserver_sock, {"action": "read", "file_index": file_index})
+                                response2 = json.loads(utils.recv_data(chunkserver_sock, bytes=False))
+                                if response2["status"] != "ok":
+                                    print(response2["payload"])
+                                    continue
+                                data = utils.recv_data(chunkserver_sock, bytes=True)
+                                break  # got this chunk from one replica
+                        except (ConnectionError, socket.timeout) as ex:
+                            print(f"{self}: lost connection! : {ex}")
                             continue
-                        chunks_data.append(utils.recv_data(chunkserver_sock, bytes=True))
-                        break ## exit the loop when succeeded to get the data from one chunk
-                except ConnectionError as ex:
-                    print(f"{self}: lost connection! : {ex}")
-                    continue
-        
-        result = b''.join(chunks_data)
-        chunk_difference = offset_end//CHUNK_SIZE - offset_begin//CHUNK_SIZE
-        result = result[offset_begin%CHUNK_SIZE:chunk_difference*CHUNK_SIZE+offset_end%CHUNK_SIZE]
-        print(result)
+
+                    if data is None:
+                        raise RuntimeError(f"chunk {i} was unavailable or corrupted in all replicas")
+
+                    # trim on the fly: start of the first chunk, end of the last one
+                    start = offset_begin % CHUNK_SIZE if i == 0 else 0
+                    end = offset_end % CHUNK_SIZE if i == last else len(data)
+                    out_file.write(data[start:end])
+                    del data  # free the chunk before fetching the next one
+
+        except RuntimeError as ex:
+            print(f"Couldn't restore the file {filename} : {ex} !")
+            os.remove(out_path)  # don't leave a partial file behind
+            return
+
+        print(f"File written to {out_path}")
 
 
     def send_list(self):

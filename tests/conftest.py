@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from mini_dfs.cli import CLI
+from mini_dfs.__main__ import CLI
 
 
 def wait_for(predicate, timeout=3.0):

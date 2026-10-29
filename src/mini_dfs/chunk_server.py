@@ -19,13 +19,14 @@ class ChunkServer():
         self.client_sock = None
         self.is_running = False
         self.dir_lock:threading.Lock=threading.Lock()
+        self.storage_dir = os.path.join("storage", self.name)
 
     def __str__(self):
         return f"[ChunkServer {self.name}, {self.host}, {self.nameserver_port}]"
 
     def start(self):
-        os.makedirs(self.name, exist_ok=True)
-        with open(os.path.join(self.name, "checksum.txt"), "w") as file:
+        os.makedirs(self.storage_dir, exist_ok=True)
+        with open(os.path.join(self.storage_dir, "checksum.txt"), "w") as file:
             for i in range(MAX_N_CHUNK_SERVER):
                 file.write("\n")
         nameserver_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -45,8 +46,8 @@ class ChunkServer():
     def stop(self):
         print(f"{self} is disconnecting...")
         self.is_running = False
-        if os.path.exists(self.name): ## Clears the whole storage before starting another session.
-            rmtree(self.name)
+        if os.path.exists(self.storage_dir): ## Clears the whole storage before starting another session.
+            rmtree(self.storage_dir)
         if self.nameserver_conn:
             self.nameserver_conn.close()
         if self.client_sock:
@@ -97,24 +98,24 @@ class ChunkServer():
 
     def process_allocate_request(self, req):
         with self.dir_lock:
-            os.makedirs(self.name, exist_ok=True)
-            if len(os.listdir(self.name)) > MAX_N_CHUNK_SERVER: ## If no more place in servers
+            os.makedirs(self.storage_dir, exist_ok=True)
+            if len(os.listdir(self.storage_dir)) > MAX_N_CHUNK_SERVER: ## If no more place in servers
                 self.nameserver_conn.reply(req, {"status": "nok"})
                 return
             used = {
                 int(f[:-4])
-                for f in os.listdir(self.name)
+                for f in os.listdir(self.storage_dir)
                 if f.endswith(".bin") and f[:-4].isdigit()
             }
             index = min(set(range(len(used) + 1)) - used)
-            open(os.path.join(self.name, f"{index}.bin"), "wb").close()
+            open(os.path.join(self.storage_dir, f"{index}.bin"), "wb").close()
         client_host, client_port = self.advertise_host, self.client_sock.getsockname()[1]  # getsockname() host is 0.0.0.0 (bind address)
         self.nameserver_conn.reply(req, {"status": "ok", "client_host": client_host, "client_port": client_port, "file_index": index})
 
     def process_storage_request(self, req):
         response = {
             "action":"storage",
-            "memory":sum(1 for filename in os.listdir(self.name) if filename[-4:] == ".bin")
+            "memory":sum(1 for filename in os.listdir(self.storage_dir) if filename[-4:] == ".bin")
         }
         self.nameserver_conn.reply(req, response)
 
@@ -122,24 +123,31 @@ class ChunkServer():
         file_index = req["file_index"]
         data = utils.recv_data(conn, bytes=True)
         # write chunk
-        with open(os.path.join(self.name,f"{file_index}.bin"), "r+b") as file:
+        with open(os.path.join(self.storage_dir,f"{file_index}.bin"), "r+b") as file:
             file.write(data)
 
         # write its checksum in the checksum.txt
-        with open(os.path.join(self.name,f"checksum.txt"), "r") as checksum_file:
+        with open(os.path.join(self.storage_dir,f"checksum.txt"), "r") as checksum_file:
             checksums = checksum_file.readlines()
         checksums[file_index] = hashlib.md5(data).hexdigest()
-        with open(os.path.join(self.name,f"checksum.txt"), "w") as checksum_file:
+        with open(os.path.join(self.storage_dir,f"checksum.txt"), "w") as checksum_file:
             checksum_file.writelines(checksums)
         utils.send_data(conn, {"status":"ok"})
 
     def process_read_request(self, conn:socket.socket, req):
         file_index = req["file_index"]
-        filenames = [int(filename[:-4]) for filename in os.listdir(self.name) if filename != 'checksum.txt']
+        filenames = [int(filename[:-4]) for filename in os.listdir(self.storage_dir) if filename != 'checksum.txt']
         if file_index not in filenames:
             utils.send_data(conn, {'status':'nok', 'payload':'did not find a chunk from the stored file...'})
             return
-        with open(os.path.join(self.name, str(file_index)+'.bin'), 'rb') as file:
+        with open(os.path.join(self.storage_dir, str(file_index)+'.bin'), 'rb') as file:
             chunk = file.read()
-        utils.send_data(conn, {'status':'ok'})
-        utils.send_data(conn, chunk)
+        with open(os.path.join(self.storage_dir, 'checksum.txt'), 'r') as file:
+            for i, line in enumerate(file):
+                if i == file_index:
+                    ref_checksum = line.strip()
+        if ref_checksum != hashlib.md5(chunk).hexdigest():
+            utils.send_data(conn, {'status':'nok', 'payload':'a chunk has been corrupted.'})
+        else:
+            utils.send_data(conn, {'status':'ok'})
+            utils.send_data(conn, chunk)
