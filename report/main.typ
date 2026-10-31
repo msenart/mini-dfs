@@ -95,12 +95,6 @@
 #counter(page).update(1)
 #outline(title: "Table of Contents", indent: auto, depth: 3)
 
-#pagebreak()
-#outline(title: "List of Figures", target: figure.where(kind: image))
-
-#pagebreak()
-#outline(title: "List of Tables", target: figure.where(kind: table))
-
 // ============================================================
 //  Report body
 // ============================================================
