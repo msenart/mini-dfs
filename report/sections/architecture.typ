@@ -205,6 +205,13 @@ chunkserver_storage
 
 When the client asks to read a specific file or specific byte range, the nameserver sends the whole file's metadata back to it, and the client computes which chunks are actually needed. For each one, the chunkserver verifies two independent invariants before sending it back: the chunk's *length* on disk must match the length recorded at write time, and its *MD5 checksum* must match too — length first, since it's a cheap comparison that can fail fast on a truncated or padded chunk without paying for a hash over the whole chunk; the checksum still catches same-length corruption that a length check alone cannot. Only once both checks pass are the bytes sent back to the client, which finally extracts the requested bytes from them.
 
+== Handling exceptions
+
+Exception handling might be the weakest part of the project. It was quite messy: as it was not written in Java, we can't know at every moment which method could raise an Exception. This was all the more important since we have manipulated unstable objects such as threads and sockets. However, we could notice mainly three scenarios when exception handling can be well managed: 
+- *For socket instance handling:* we have used the structure `with self.socket as sock:`
+- *Whenever performing a network request:* we wrap it in a `try:... except Exception as ex:... finally:...` to handle sudden disconnections.
+- *Whenever we perform a network request that succeded, but the remote request performance failed:* This happens when we want to store a file that is too heavy to be stored in the database. A JSON message `{'status':'nok', 'payload':<message>}` is returned to the sender, indicating through the payload that the opration has failed.
+
 == Limitations of the Implementation <sec-limitations>
 
 This model is scoped to fit a course project rather than production use. The nameserver only ever organizes traffic — it never reads or writes file bytes itself, which keeps it lightweight and mirrors GFS's core separation of metadata from data. Replication also mirrors GFS: it is chunkserver-pipelined rather than client-driven, so that the client's connection is not overloaded. Finally, the preallocation with the lock before actually writing the chunks made the writing process more secure.
