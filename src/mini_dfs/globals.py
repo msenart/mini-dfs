@@ -13,5 +13,5 @@ CHUNK_SERVER_PORT = int(os.environ.get("CHUNK_SERVER_PORT", 8081))
 
 # Hyperparameters
 CHUNK_SIZE = 2*1024*1024    # Chunk size in bytes.
-MAX_N_CHUNK_SERVER = 100    # The maximum memory allocated for each server, in term of memory chunks. (Memory = CHUNK_SIZE * MAX_N_CHUNK_SERVER)
+MAX_N_CHUNK_SERVER = 10    # The maximum memory allocated for each server, in term of memory chunks. (Memory = CHUNK_SIZE * MAX_N_CHUNK_SERVER)
 N_REPLICAS = 3              # How many times there should be a chunk replica. (each replica is stored in a different database)

@@ -97,19 +97,23 @@ class Client():
             while buf := file.read(CHUNK_SIZE):
                 chunks.append(buf)
         for chunk, chunk_mds in zip(chunks, tot_chunks_mds):     # loop over all chunks
-            for chunk_md in chunk_mds:                      # loop over each replica coordinate
-                host, port, file_index = chunk_md["host"], chunk_md["port"], chunk_md["file_index"] # file_index refers to the allocated chunk in the chunkserver.
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as chunkserver_sock:
-                    chunkserver_sock.connect((host, port))
-                    req = {
-                        "action":"write",
-                        "file_index":file_index,
-                    }
-                    utils.send_data(chunkserver_sock, req)
-                    utils.send_data(chunkserver_sock, chunk)
-                    response = json.loads(utils.recv_data(chunkserver_sock, bytes=False))
-                    if response["status"] != "ok":
-                        raise BrokenPipeError(f"the server {host}:{port} couldn't write the chunk !")
+            # Pipelined replication: the chunk is only sent once, to the first replica.
+            # That chunkserver forwards it (and the remaining targets) to the next one,
+            # and so on, instead of the client sending the same bytes N_REPLICAS times.
+            primary, *forward_to = chunk_mds
+            host, port, file_index = primary["host"], primary["port"], primary["file_index"] # file_index refers to the allocated chunk in the chunkserver.
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as chunkserver_sock:
+                chunkserver_sock.connect((host, port))
+                req = {
+                    "action":"write",
+                    "file_index":file_index,
+                    "forward_to":forward_to,
+                }
+                utils.send_data(chunkserver_sock, req)
+                utils.send_data(chunkserver_sock, chunk)
+                response = json.loads(utils.recv_data(chunkserver_sock, bytes=False))
+                if response["status"] != "ok":
+                    raise BrokenPipeError(f"the replica chain starting at {host}:{port} couldn't write the chunk : {response.get('payload')}")
 
     def send_read(self, filename, offset_begin=0, offset_end=0):
         req = {

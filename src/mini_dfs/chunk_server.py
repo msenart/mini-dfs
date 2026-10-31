@@ -121,17 +121,40 @@ class ChunkServer():
 
     def process_write_request(self, conn:utils.QueueConn, req):
         file_index = req["file_index"]
+        forward_to = req.get("forward_to", [])
         data = utils.recv_data(conn, bytes=True)
         # write chunk
         with open(os.path.join(self.storage_dir,f"{file_index}.bin"), "r+b") as file:
             file.write(data)
 
-        # write its checksum in the checksum.txt
+        # write its checksum and length in the checksum.txt, for integrity verification on read
         with open(os.path.join(self.storage_dir,f"checksum.txt"), "r") as checksum_file:
             checksums = checksum_file.readlines()
-        checksums[file_index] = hashlib.md5(data).hexdigest()
+        checksums[file_index] = f"{hashlib.md5(data).hexdigest()} {len(data)}\n"
         with open(os.path.join(self.storage_dir,f"checksum.txt"), "w") as checksum_file:
             checksum_file.writelines(checksums)
+
+        # Pipelined replication: forward the same chunk to the next replica in the
+        # chain (if any), and only ack once that hop has acked too.
+        if forward_to:
+            next_target, remaining = forward_to[0], forward_to[1:]
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as next_sock:
+                    next_sock.connect((next_target["host"], next_target["port"]))
+                    utils.send_data(next_sock, {
+                        "action": "write",
+                        "file_index": next_target["file_index"],
+                        "forward_to": remaining,
+                    })
+                    utils.send_data(next_sock, data)
+                    response = json.loads(utils.recv_data(next_sock, bytes=False))
+            except OSError as e:
+                utils.send_data(conn, {"status": "nok", "payload": f"couldn't reach replica {next_target['host']}:{next_target['port']} : {e}"})
+                return
+            if response.get("status") != "ok":
+                utils.send_data(conn, {"status": "nok", "payload": f"replica {next_target['host']}:{next_target['port']} failed : {response.get('payload')}"})
+                return
+
         utils.send_data(conn, {"status":"ok"})
 
     def process_read_request(self, conn:socket.socket, req):
@@ -145,8 +168,14 @@ class ChunkServer():
         with open(os.path.join(self.storage_dir, 'checksum.txt'), 'r') as file:
             for i, line in enumerate(file):
                 if i == file_index:
-                    ref_checksum = line.strip()
-        if ref_checksum != hashlib.md5(chunk).hexdigest():
+                    ref_checksum, ref_length = line.split()
+                    ref_length = int(ref_length)
+
+        # integrity check: length first (cheap, fails fast on truncation/padding),
+        # then the checksum (catches same-length corruption the length check can't).
+        if len(chunk) != ref_length:
+            utils.send_data(conn, {'status':'nok', 'payload':f'a chunk has an unexpected length (expected {ref_length}, got {len(chunk)}).'})
+        elif ref_checksum != hashlib.md5(chunk).hexdigest():
             utils.send_data(conn, {'status':'nok', 'payload':'a chunk has been corrupted.'})
         else:
             utils.send_data(conn, {'status':'ok'})

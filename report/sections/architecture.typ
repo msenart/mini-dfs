@@ -47,7 +47,7 @@
 
 The database architecture is shown in the schematic right above, illustrating a client requesting to store a file in the database. First, the client asks the nameserver to store a file. The nameserver then asks the chunkservers for their remaining storage. Considering this, it evaluates the best file arrangement for the chunkservers: the client's file is going to be split into chunks of regular size and then sent to the concerned servers. The nameserver sends back to the client the information about which chunkserver each chunk should go to. Finally, the client splits the data itself and sends it to the concerned chunkservers.
 
-The reproduced model is simplified: no heartbeat (chunkservers regularly telling the nameserver that they are alive) and no chunkserver-to-chunkserver replication — the client itself is the one sending every replica (see @sec-limitations below).
+The reproduced model is simplified on one front in particular: there is no heartbeat (chunkservers regularly telling the nameserver that they are alive), so a dead chunkserver is only noticed the next time a request happens to target it (see @sec-limitations below). Chunk replication, however, follows GFS's design: the client sends each chunk's bytes once, and the chunkservers themselves pipeline it on to the other replicas (detailed in Storage Organization and Integrity, below).
 
 == Software architecture
 
@@ -179,9 +179,15 @@ Right after that, the nameserver asks the chunkservers to allocate the chunks (c
   }
 }
 ```
-It then sends this placement back to the client as a JSON message. The client finally sends the chunks to the concerned servers; in this project, it is the client — not the chunkservers or the nameserver — that takes care of sending every replica.
+It then sends this placement back to the client as a JSON message.
 
-When receiving the data and storing it in its chunk, the chunkserver also computes and stores an MD5 checksum in a dedicated file named ``checksums.txt``.
+The client then writes each chunk through *pipelined replication*, the same way GFS does: rather than sending the chunk's bytes to every replica itself, the client sends them _once_, to the first chunkserver in that chunk's replica list, together with the list of the *remaining* replicas as an extra ``forward_to`` field in the write header:
+```python
+{'action':'write', 'file_index':file_index, 'forward_to':[{'host':..., 'port':..., 'file_index':...}, ...]}
+```
+That chunkserver writes the chunk locally exactly as before, and — if ``forward_to`` is non-empty — opens its own connection to the next chunkserver in the list, forwards the same header shape (with ``forward_to`` trimmed by one) and the same chunk bytes, and only acknowledges its own caller once that next hop has acknowledged in turn. This chains the replicas together (client $->$ chunkserver A $->$ chunkserver B $->$ chunkserver C), with the final acknowledgment unwinding back up the chain to the client, instead of the client opening ``N_REPLICAS`` connections and sending the same bytes that many times itself.
+
+When receiving the data and storing it in its chunk, the chunkserver also computes an MD5 checksum and records it, together with the chunk's byte length, as one line (``<checksum> <length>``) in a dedicated file named ``checksum.txt``.
 
 The chunkserver's storage layout is the following:
 
@@ -191,17 +197,17 @@ chunkserver_storage
 ├── 2.bin
 ├── 3.bin
 ├── ...
-└── checksums.txt
+└── checksum.txt
 ```
 
-When the client asks to read a specific file or specific byte range, the nameserver sends the whole file's metadata back to it, and the client computes which chunks are actually needed. The chunkservers read the relevant chunks, verify that the checksum is correct, and send the chunks back to the client, which finally extracts the requested bytes from them.
+When the client asks to read a specific file or specific byte range, the nameserver sends the whole file's metadata back to it, and the client computes which chunks are actually needed. For each one, the chunkserver verifies two independent invariants before sending it back: the chunk's *length* on disk must match the length recorded at write time, and its *MD5 checksum* must match too — length first, since it's a cheap comparison that can fail fast on a truncated or padded chunk without paying for a hash over the whole chunk; the checksum still catches same-length corruption that a length check alone cannot. Only once both checks pass are the bytes sent back to the client, which finally extracts the requested bytes from them.
 
 == Limitations of the Implementation <sec-limitations>
 
-This model is a deliberately simplified version of GFS, scoped to fit a course project rather than production use. The nameserver only ever organizes traffic — it never reads or writes file bytes itself, which keeps it lightweight and mirrors GFS's core separation of metadata from data.
+This model is a deliberately simplified version of GFS, scoped to fit a course project rather than production use. The nameserver only ever organizes traffic — it never reads or writes file bytes itself, which keeps it lightweight and mirrors GFS's core separation of metadata from data. Replication also mirrors GFS: it is chunkserver-pipelined rather than client-driven, so a client's own upload bandwidth is no longer divided by ``N_REPLICAS`` (quantified in the Performance section).
 
 There are still limitations to our implementation:
-- *Replication is client-driven, not server-orchestrated.* Each chunk's ``N_REPLICAS`` copies are sent by the *client* directly to every target chunkserver, rather than being pipelined chunkserver-to-chunkserver as in GFS. This divides a client's effective upload bandwidth by ``N_REPLICAS`` — quantified in the Performance section.
+- *The replication chain doesn't stream.* Each hop in the chain fully receives a chunk before forwarding it to the next one (`data = utils.recv_data(...)` blocks until the whole chunk is in), rather than forwarding bytes as they arrive. A chunk's total write latency is still the sum of every hop's transfer time, not overlapped — real GFS pipelines at the byte-stream level for exactly this reason.
 - *No heartbeat.* There is no periodic liveness check between the nameserver and the chunkservers, so a dead chunkserver is only discovered the next time a request happens to target it, and nothing automatically restores the replicas it was holding.
 - *Little verification between actors.* Beyond the chunk checksum, there is no authentication protocol — nothing stops a client from acting under another client's name, and chunkservers trust whatever the nameserver tells them.
 - *Metadata lives only in memory* on the nameserver — discussed further in the Scalability section.

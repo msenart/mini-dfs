@@ -8,7 +8,7 @@ This school project's purpose is to simulate a mini distributed file system (min
 
 The project is managed through the module manager *uv*. The project is *dependency-free* (outside of ``pytest`` for testing). It handles its connections with TCP protocols only and the built-in ``socket`` module.
 
-Hyperparameters in ``globals.py`` can be changed before launching the project — most notably ``CHUNK_SIZE`` (2 MiB by default) and ``N_REPLICAS`` (3 by default).
+Hyperparameters in ``globals.py`` can be changed before launching the project — most notably ``CHUNK_SIZE`` (2 MiB by default) and ``N_REPLICAS`` (3 by default). Apart from that, there is NO data leak between the different instances.
 
 The CLI was built using the built-in ``cmd`` module from Python.
 
