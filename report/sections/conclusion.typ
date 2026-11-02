@@ -1,13 +1,13 @@
-// ---------- 5. Limitations and conclusion ----------
+there// ---------- 5. Limitations and conclusion ----------
 = Limitations and Conclusion
 
 == Scalability
 
 The chunk layer scales the way GFS's does: storage capacity and write bandwidth grow by adding chunkservers, and the nameserver never touches file bytes, so it never becomes a data-path bottleneck. Three aspects limit how far this implementation specifically scales, though:
 
-- *Metadata is not persisted.* The nameserver keeps its entire file-ID-to-chunk lookup table (`self.files`) as a plain in-memory `dict`. If the nameserver process dies, every chunk byte on every chunkserver becomes unreachable, even though the data itself is untouched — there is no operation log or checkpoint to replay, unlike GFS's master.
-- *No failure detection.* There is no heartbeat between the nameserver and the chunkservers; a chunkserver that silently dies is only noticed on the next request that happens to target it, and nothing re-replicates the copies it was holding.
-- *The metadata path is serial* (see Performance): querying $N$ chunkservers for free space costs $N$ sequential round trips today, so adding chunkservers to gain write throughput currently backfires.
+- Metadata is not persisted: the nameserver keeps its entire file-ID-to-chunk lookup table (`self.files`) as a plain in-memory `dict`. If the nameserver process dies, every chunk byte on every chunkserver becomes unreachable, even though the data itself is untouched, since there is no operation log or checkpoint to replay, unlike GFS's master.
+- No failure detection: there is no heartbeat between the nameserver and the chunkservers; a chunkserver that silently dies is only noticed on the next request that happens to target it, and nothing re-replicates the copies it was holding.
+- The metadata path is serial (see Performance): querying $N$ chunkservers for free space costs $N$ sequential round trips today, so adding chunkservers to gain write throughput currently backfires.
 
 These problems are minor and well localized, rather than vague project directions. These are potential tracks that would help implement what is above:
 - persistence would extend `NameServer.files`'s read/write path with a simple append-only log or periodic snapshot to disk;
@@ -17,19 +17,23 @@ These problems are minor and well localized, rather than vague project direction
 
 == Conclusion
 
-mini-dfs set out to reproduce, at a small scale, the core idea behind the Google File System: keep metadata and data on separate paths, let a single coordinator place data without ever carrying it, and replicate it the way GFS does rather than the way that's easiest to code. All three are implemented and demonstrated end to end — a client can write a file that gets chunked and replicated across several chunkservers chosen by a simple least-loaded heuristic, with the chunkservers themselves pipelining each chunk on to its other replicas instead of the client sending it `N_REPLICAS` times, and later read it back byte-exact and checksum-verified from any offset, entirely over hand-rolled TCP sockets and JSON framing.
+mini-dfs set out to reproduce, at a small scale, the core idea behind the Google File System: keep metadata and data on separate paths, let a single coordinator place data without ever carrying it, and replicate it the way GFS does rather than the way that's easiest to code. All three are implemented and demonstrated end to end: a client can write a file that gets chunked and replicated across several chunkservers chosen by a simple least-loaded heuristic, with the chunkservers themselves pipelining each chunk on to its other replicas instead of the client sending it `N_REPLICAS` times, and later read it back byte-exact and checksum-verified from any offset, entirely over hand-rolled TCP sockets and JSON framing.
 
-Building it surfaced three problems that make distributed storage hard even at this scale: making sure a reply reaches the thread that is actually waiting for it when several requests share one socket connection (solved here with `QueueConn`'s request-id–based dispatch, detailed in the Architecture section); keeping the coordinator off the data path without starving it of the information it needs to place data well (solved here, imperfectly — see Scalability — with a synchronous storage poll that does not yet scale past a handful of chunkservers); and moving replication bandwidth off the client without being able to show the improvement on a single-machine benchmark (solved in the code, and deliberately reported as *not* shown by the wall-clock numbers in the Performance section — a reminder that a benchmark can be honest about its own blind spots instead of overclaiming).
+Building it surfaced three problems that make distributed storage hard even at this scale: making sure a reply reaches the thread that is actually waiting for it when several requests share one socket connection (solved here with `QueueConn`'s request-id based dispatch, detailed in the Architecture section); keeping the coordinator off the data path without starving it of the information it needs to place data well (solved here, imperfectly, see Scalability, with a synchronous storage poll that does not yet scale past a handful of chunkservers); and moving replication bandwidth off the client without being able to show the improvement on a single-machine benchmark (solved in the code, and deliberately reported as not shown by the wall-clock numbers in the Performance section, a reminder that a benchmark can be honest about its own blind spots instead of overclaiming).
 
-The simplifications still accepted — no metadata persistence, no heartbeats, a replication chain that forwards a whole chunk at a time rather than streaming it — are among the pieces GFS spends the most engineering effort on. In hindsight, that was a reasonable way to spend a limited project budget: get the core data path right and measurable first, fix the parts that were clearly wrong once understood (client-driven replication among them), and leave the remaining wor clearly scoped. 
+The simplifications still accepted (no metadata persistence, no heartbeats, a replication chain that forwards a whole chunk at a time rather than streaming it) are among the pieces GFS spends the most engineering effort on. In hindsight, that was a reasonable way to spend a limited project budget: get the core data path right and measurable first, fix the parts that were clearly wrong once understood (client-driven replication among them), and leave the remaining work clearly scoped.
 
 == Contributions
 
-*Mathieu SENART:* wrote `allocate` and `write` request, coordinated the codebase for the final report.
-
-*Prusothman VIGNESWARAN:* initiated the codebase architecture (has written first the files and the classes, and the right socket usage).
-
-*Marc JUSTO ARBONA:* wrote `read` request, coded the interactive CLI.
-
-*David MUY:* has written the report.
+#table(
+  columns: (auto, 1fr),
+  align: (left, left),
+  stroke: 0.5pt + luma(150),
+  inset: 6pt,
+  table.header([*Member*], [*Contribution*]),
+  [Mathieu SENART], [Wrote the `allocate` and `write` request handling, coordinated the codebase for the final report.],
+  [Prusothman VIGNESWARAN], [Initiated the codebase architecture: wrote the first files and classes, and the socket usage.],
+  [Marc JUSTO ARBONA], [Wrote the `read` request handling, coded the interactive CLI.],
+  [David MUY], [Wrote the report.],
+)
 

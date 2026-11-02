@@ -6,9 +6,9 @@ This school project's purpose is to simulate a mini distributed file system (min
 - a master (named `NameServer` in the code), which deals with all the metadata and organizes the traffic.
 - `Client`, which are the database users.
 
-The project is managed through the module manager `uv`. The project is *dependency-free* (outside of `pytest` for testing). It handles its connections with TCP protocols only and the built-in `socket` module.
+The project is managed through the module manager `uv`. The project is dependency-free (outside of `pytest` for testing). It handles its connections with TCP protocols only and the built-in `socket` module.
 
-Hyperparameters in `globals.py` can be changed before launching the project — most notably `CHUNK_SIZE` (2 MiB by default) and `N_REPLICAS` (3 by default). Apart from the hyperparameters, there is NO data leak between the different instances.
+Hyperparameters in `globals.py` can be changed before launching the project, most notably `CHUNK_SIZE` (2 MiB by default) and `N_REPLICAS` (3 by default). Apart from the global hyperparameters, there is no data leak between the different instances of the simulation, making the simulation reproducible with real devices.
 
 The CLI was built using the built-in `cmd` module from Python.
 
@@ -25,7 +25,7 @@ read alice big_demo.bin 2000000 2000064     # read 64 bytes near the 2 MB mark, 
 read alice big_demo.bin 2097136 2097168     # read 32 bytes straddling the chunk 0 / chunk 1 boundary.
 ```
 
-Running these exact commands against a real 8.58 MB file, `big_demo.bin` — the demo PDF `project_ict_3.pdf` concatenated with itself four times end-to-end, so the content is genuine file bytes rather than synthetic filler, and large enough to split into 5 chunks of `CHUNK_SIZE` (2 MiB) each, the last one partial — gives:
+Running these exact commands against a real 8.58 MB file, `big_demo.bin` (the demo PDF `project_ict_3.pdf` concatenated with itself four times end-to-end, so the content is genuine file bytes rather than synthetic filler, and large enough to split into 5 chunks of `CHUNK_SIZE` (2 MiB) each, the last one partial), gives:
 
 ```text
 (mini-dfs) macro
@@ -53,7 +53,7 @@ All entities have started !
 
 === Chunk distribution and replica placement
 
-Inspecting `storage/dsN/` directly right after the write shows how the 5 chunks $times$ `N_REPLICAS` = 3 = 15 chunk copies actually landed — 4 on `ds1`, `ds2`, `ds3` each, and 3 on `ds4`, since the last chunk is small enough (186,268 bytes) that `ds4` wasn't picked as one of its 3 least-loaded replicas:
+Inspecting `storage/dsN/` directly right after the write shows how the 5 chunks $times$ `N_REPLICAS` = 3 = 15 chunk copies actually landed: 4 on `ds1`, `ds2`, `ds3` each, and 3 on `ds4`, since the last chunk is small enough (186,268 bytes) that `ds4` wasn't picked as one of its 3 least-loaded replicas:
 
 #figure(
   table(
@@ -70,7 +70,7 @@ Inspecting `storage/dsN/` directly right after the write shows how the 5 chunks 
   caption: [Real per-chunkserver chunk counts and byte totals after writing `big_demo.bin`, read directly off disk.],
 )
 
-The nameserver's `self.files[1]["chunk_handles"]` entry records exactly which chunkserver (and which *local* file index on that chunkserver — each chunkserver numbers its own `.bin` files independently) holds each of the 5 logical chunks:
+The nameserver's `self.files[1]["chunk_handles"]` entry records exactly which chunkserver (and which local file index on that chunkserver, since each chunkserver numbers its own `.bin` files independently) holds each of the 5 logical chunks:
 
 #figure(
   table(
@@ -88,7 +88,7 @@ The nameserver's `self.files[1]["chunk_handles"]` entry records exactly which ch
   caption: [Chunk-to-replica mapping for `big_demo.bin`, read directly from the nameserver's in-memory table. The least-loaded placement rotates which three servers get picked as each chunk is allocated.],
 )
 
-As a cross-check independent of the read path's own integrity verification (Storage Organization and Integrity), reading `checksum.txt` on two different replicas of chunk 0 — `ds1`'s `0.bin` and `ds2`'s `0.bin` — by hand gives the exact same checksum and length:
+As a cross-check independent of the read path's own integrity verification (Storage Organization and Integrity), reading `checksum.txt` on two different replicas of chunk 0 (`ds1`'s `0.bin` and `ds2`'s `0.bin`) by hand gives the exact same checksum and length:
 
 ```text
 storage/ds1/checksum.txt line 0 (ds1's 0.bin): d03a2f029848d41b860f63b0934f3be0 2097152
@@ -110,14 +110,14 @@ File written to storage\alice\big_demo.bin
 
 Each of these three reads was independently verified against the real `big_demo.bin` bytes on disk (the client always writes to the same output path, so each result was captured and compared before the next read overwrote it):
 
-- *Full read* (`0 -1`): 8,574,876 bytes come back, byte-identical to the entire source file — the complete round trip across all 5 chunks and 4 chunkservers.
-- *Near the 2 MB mark, inside chunk 0* (`2000000 2000064`): 64 bytes, entirely within chunk 0 (which spans bytes 0 to 2,097,151), so this exercises a plain single-chunk fetch at an offset close to — but short of — the chunk boundary. Byte-identical to `big_demo.bin[2000000:2000064]`, hex:
+- Full read (`0 -1`): 8,574,876 bytes come back, byte-identical to the entire source file. This is the complete round trip across all 5 chunks and 4 chunkservers.
+- Near the 2 MB mark, inside chunk 0 (`2000000 2000064`): 64 bytes, entirely within chunk 0 (which spans bytes 0 to 2,097,151), so this exercises a plain single-chunk fetch at an offset close to, but short of, the chunk boundary. Byte-identical to `big_demo.bin[2000000:2000064]`, hex:
   ```
   2b52f341b2bc455995885f7ad4a2803929be1e6853485d924c9ff6a961f87d
   a1420858df9f535d651401f3af886da2b3d72eeda204246f85acded5b5e2e4
   71e2
   ```
-- *Across the chunk 0 / chunk 1 frontier* (`2097136 2097168`, i.e. `CHUNK_SIZE` $-$ 16 to `CHUNK_SIZE` $+$ 16): 32 bytes, the last 16 of chunk 0 fused with the first 16 of chunk 1 — two separate chunkserver round trips stitched into one contiguous result. Byte-identical to `big_demo.bin[2097136:2097168]`, hex:
+- Across the chunk 0 / chunk 1 frontier (`2097136 2097168`, i.e. `CHUNK_SIZE` $-$ 16 to `CHUNK_SIZE` $+$ 16): 32 bytes, the last 16 of chunk 0 fused with the first 16 of chunk 1, two separate chunkserver round trips stitched into one contiguous result. Byte-identical to `big_demo.bin[2097136:2097168]`, hex:
   ```
   57915bb1cf92927c83e991c56bd8585be9d6c2ded936a64b1cf2589ea49ee69
   5
