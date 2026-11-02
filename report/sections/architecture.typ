@@ -107,7 +107,7 @@ To send a raw byte chunk, the sender (client or chunkserver) first sends a JSON 
 The sockets are organized this way:
 - Client $<->$ Nameserver: the client has the nameserver socket as an attribute, whereas the nameserver handles the client socket in a dedicated thread that always listens on it.
 - Nameserver $<->$ Chunkserver: since the nameserver has to compute the best placement for an incoming file, it needs to know about all the chunkservers from a single thread, so the nameserver groups every chunkserver socket into a list attribute. Each chunkserver, conversely, only has the nameserver socket as a single attribute.
-- Client $<->$ Chunkserver: a connection is opened and closed on the fly to write and read chunks directly from the source. The client is always the caller and the chunkserver is always the listener, for both reading and writing requests.
+- Client $<->$ Chunkserver: a connection is opened and closed on the fly to write and read chunks directly from the source. For a given connection, the chunkserver is always the listener; the caller is usually the client, but during pipelined writes a chunkserver forwarding a chunk to the next replica becomes the caller itself, reconnecting to that next chunkserver's very same client-facing listening socket.
 
 #figure(
   layout(size => {
@@ -145,6 +145,14 @@ The sockets are organized this way:
         label-pos: 0.5, label-side: left, label-fill: true),
       edge(<alice>, <cs3>, "<->"),
       edge(<alice>, <cs4>, "<->"),
+
+      // Chunkserver <-> Chunkserver (pipelined write forwarding, same on-the-fly
+      // socket and the same listening endpoint as Alice <-> Chunkserver above)
+      edge(<cs1>, <cs2>, "<->",
+        label: [Forward (write pipeline) \ Caller $<->$ Listener \ (same endpoint as above)],
+        label-pos: 0.5, label-side: right, label-fill: true),
+      edge(<cs2>, <cs3>, "<->"),
+      edge(<cs3>, <cs4>, "<->"),
     )
 
     let w = measure(d).width

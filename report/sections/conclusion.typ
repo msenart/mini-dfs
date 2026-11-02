@@ -22,3 +22,14 @@ mini-dfs set out to reproduce, at a small scale, the core idea behind the Google
 Building it surfaced three problems that make distributed storage hard even at this scale: making sure a reply reaches the thread that is actually waiting for it when several requests share one socket connection (solved here with `QueueConn`'s request-id–based dispatch, detailed in the Architecture section); keeping the coordinator off the data path without starving it of the information it needs to place data well (solved here, imperfectly — see Scalability — with a synchronous storage poll that does not yet scale past a handful of chunkservers); and moving replication bandwidth off the client without being able to show the improvement on a single-machine benchmark (solved in the code, and deliberately reported as *not* shown by the wall-clock numbers in the Performance section — a reminder that a benchmark can be honest about its own blind spots instead of overclaiming).
 
 The simplifications still accepted — no metadata persistence, no heartbeats, a replication chain that forwards a whole chunk at a time rather than streaming it — are among the pieces GFS spends the most engineering effort on. In hindsight, that was a reasonable way to spend a limited project budget: get the core data path right and measurable first, fix the parts that were clearly wrong once understood (client-driven replication among them), and leave the remaining wor clearly scoped. 
+
+== Contributions
+
+*Mathieu SENART:* wrote `allocate` and `write` request, coordinated the codebase for the final report.
+
+*Prusothman VIGNESWARAN:* initiated the codebase architecture (has written first the files and the classes, and the right socket usage).
+
+*Marc JUSTO ARBONA:* wrote `read` request, coded the interactive CLI.
+
+*David MUY:* has written the report.
+
