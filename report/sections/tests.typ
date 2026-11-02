@@ -22,9 +22,9 @@ To get a concrete sense of the overhead introduced by the JSON control-plane tra
   caption: [Write/read wall-clock time and write throughput, single machine, loopback TCP, after moving to pipelined replication. Single-run measurements meant to show architectural trends, not calibrated absolute numbers.],
 )
 
-With 4 chunkservers (where `N_REPLICAS = 3` actually applies — with a single chunkserver there is only ever 1 copy, replicated or not), wall-clock write time is only modestly better than before the change (roughly 10-25% faster, e.g. 1.786 s $->$ 1.352 s for 40 MiB), *not* three times faster as the "client sends it 3 times" framing might suggest. The reason is simple once the mechanism is spelled out: on one machine over loopback, the *total* bytes moved on the wire are unchanged — three copies of each chunk still get transferred, whether the client makes all three transfers itself or a chain of chunkservers does, and the chain is not byte-pipelined (noted in Architecture), so the hops run one after another rather than overlapping. Wall-clock time on a single-machine benchmark was never going to show the real benefit.
+With 4 chunkservers (where `N_REPLICAS = 3` actually applies — with a single chunkserver there is only ever 1 copy), the write/read throughput is roughly three times lower when `N_REPLICAS  = 3`, and performance gets a little lower the more there are chunks to send. The reason is simple once the mechanism is spelled out: the write request is ensured by the chunkservers to be well performed on each chunkserver. During the chunkserver writing phase, the chunkserver sends the `forward_to` dictionary, and waits the next chunkserver for acknowledgment that the its writing operation is well performed. The client also waits for an acknowledgment from the chunkservers. When `N_REPLICAS = 3`, this means that 3 acknowledgments were sent, 2 for the chunkservers, one for the client.
 
-What *does* change, deterministically, is how many bytes the _client itself_ has to send — which is the actual point of pipelining in GFS, since a client's own uplink (e.g. a laptop on a home connection writing to a datacenter) is usually the scarce resource, not the datacenter-internal links between chunkservers:
+So we don't gain much write time, and the naive solution, which consists of making the client send the replicas three times to each chunkserver, would have performed similarly, and maybe better. What does change, deterministically, is how many bytes the _client itself_ has to send — which is the actual point of pipelining in GFS, since a client's own bandwidth is usually the most lacking resource, not the datacenter-internal links between chunkservers:
 
 #figure(
   table(
@@ -34,7 +34,7 @@ What *does* change, deterministically, is how many bytes the _client itself_ has
     inset: 6pt,
     table.header([*Payload*], [*Client egress — before*], [*Client egress — after*]),
     [2 MiB (1 chunk)],   [6 MiB  (2 MiB $times$ 3)],  [2 MiB],
-    [10 MiB (5 chunks)], [30 MiB (10 MiB $times$ 3)], [10 MiB],
+    [10 MiB (5 chunks)], [30 MiB (10 MiB $times$ 3)], [10 MiB],  
     [40 MiB (20 chunks)], [120 MiB (40 MiB $times$ 3)], [40 MiB],
   ),
   caption: [Bytes the client itself has to upload for a write, with `N_REPLICAS = 3`: exactly 3$times$ before the change (client sends every replica), exactly 1$times$ after (client sends each chunk once; chunkservers forward the rest).],

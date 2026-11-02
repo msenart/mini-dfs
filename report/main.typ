@@ -11,9 +11,8 @@
 // ---------- Metadata (edit these) ----------
 #let titre = "mini-dfs"
 #let sous-titre = "A Simplified Distributed File System Inspired by the Google File System"
-#let auteurs = ("Mathieu SENART",) // add more names here if this was a team project
-#let encadrant = "TODO: supervisor name"
-#let organisme = "TODO: school / institute name"
+#let auteurs = ("Mathieu SENART, Prusothman VIGNESWARAN, Marc JUSTO, David MUY",) // add more names here if this was a team project
+#let organisme = "Shanghai Jiaotong University"
 #let date = datetime.today().display("[month repr:long] [day], [year]")
 // ---------- Global settings ----------
 #set document(title: titre, author: auteurs)
@@ -73,7 +72,6 @@
       #text(size: 13pt)[#a] \
     ]
     #v(1cm)
-    #text(size: 11pt)[Supervisor: #encadrant]
     #v(1fr)
     #text(size: 11pt)[#date]
   ]

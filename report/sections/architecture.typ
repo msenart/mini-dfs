@@ -46,9 +46,7 @@
 
 #v(1.5em)
 
-The database architecture is shown in the schematic right above, illustrating a client requesting to store a file in the database. When the client asks the nameserver to store a file, the nameserver then asks the chunkservers for their remaining storage. Considering this, it evaluates the best file arrangement for the chunkservers: the client's file is going to be split into chunks of regular size and then sent to the concerned servers. The nameserver sends back to the client the information about which chunkserver each chunk should go to. Finally, the client splits the data itself and sends it to the concerned chunkservers.
-
-The reproduced model is simplified on one front in particular: there is no heartbeat (chunkservers regularly telling the nameserver that they are alive), so a dead chunkserver is only noticed the next time a request happens to target it. Chunk replication, however, follows GFS's design: the client sends each chunk's bytes once, and the chunkservers themselves pipeline it on to the other replicas.
+The database architecture is shown in the schematic right above, illustrating a client requesting to store a file in the database. When the client asks the nameserver to store a file, the nameserver then asks the chunkservers for their remaining storage. Considering this, it evaluates the best file arrangement for the chunkservers: the client's file is going to be split into chunks of regular size and then sent to the concerned servers. The nameserver sends back to the client the information about which chunkserver each chunk should go to. Finally, the client splits the data itself and sends it to one of the concerned chunkservers, along with a stack of the destinations for its replicas.
 
 == Software architecture
 
@@ -58,15 +56,15 @@ The chosen language to build the project is Python, and the object-oriented arch
 project/
 ├── __init__.py
 ├── __main__.py       # entry point
-├── chunk_server.py
-├── client.py
+├── chunk_server.py   # Chunkserver class
+├── client.py         # Client class
 ├── globals.py        # shared constants and settings
-├── name_server.py
+├── name_server.py    # Nameserver class
 └── utils.py          # helper functions
 ```
 
 The project takes the form of a Python module which uses built-in Python modules only to establish connections:
-- `cmd` so that the user can interact with the database interactively.
+- `cmd` so that the user can interact with the database during runtime.
 - `socket` to establish TCP connections between the actors.
 - `threading` to make the different actors act in parallel.
 
@@ -99,7 +97,7 @@ When the chunkserver receives the request, it sends back to the nameserver:
 {'action':'storage', 'memory':<memory>}
 ```
 
-To send a byte chunk, the sender (client or chunkserver) first sends a JSON header, then the raw bytes:
+To send a raw byte chunk, the sender (client or chunkserver) first sends a JSON header, then the raw bytes:
 ```python
 {'action':'write', 'chunk_index':chunk_index} # header
 
@@ -162,7 +160,7 @@ However, there is one problem a plain socket cannot solve on its own: when sever
 
 == Storage Organization and Integrity
 
-When the nameserver receives a request from the client to store a file (the file size is given inside the client's request), it first asks the chunkservers how much space they have used. Then, the nameserver simulates the best chunk distribution among the chunkservers:
+When the nameserver receives a request from the client to store a file (the file size is given inside the client's request), it first asks the chunkservers how much space they have used with a dedicated request `getall_storage`. Then, the nameserver simulates the best chunk distribution among the chunkservers:
 ```python
 chunk_bindings = []
 for chunk in chunks:
@@ -188,7 +186,7 @@ The client then writes each chunk through *pipelined replication*: rather than s
 ```python
 {'action':'write', 'file_index':file_index, 'forward_to':[{'host':..., 'port':..., 'file_index':...}, ...]}
 ```
-That chunkserver writes the chunk locally exactly as before, and — if `forward_to` is non-empty — opens its own connection to the next chunkserver in the list, forwards the same header shape (with `forward_to` unstacked by one) and the same chunk bytes, and only acknowledges its own caller once that next hop has acknowledged in turn. This chains the replicas together (client $->$ chunkserver A $->$ chunkserver B $->$ chunkserver C), with the final acknowledgment unwinding back up the chain to the client, instead of the client opening `N_REPLICAS` connections and sending the same bytes that many times itself.
+That chunkserver writes the chunk locally exactly as before, and — if `forward_to` is non-empty — opens its own connection to the next chunkserver in the list, forwards the same header shape (with `forward_to` popped by one) and the same chunk bytes, and only acknowledges its own caller once that next hop has acknowledged in turn. This chains the replicas together (client $->$ chunkserver A $->$ chunkserver B $->$ chunkserver C), with the final acknowledgment unwinding back up the chain to the client, instead of the client opening `N_REPLICAS` connections and sending the same bytes that many times itself.
 
 When receiving the data and storing it in its chunk, the chunkserver also computes an MD5 checksum and records it, together with the chunk's byte length, as one line (`<checksum> <length>`) in a dedicated file named `checksum.txt`.
 
