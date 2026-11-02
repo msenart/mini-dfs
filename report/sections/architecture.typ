@@ -168,14 +168,16 @@ However, there is one problem a plain socket cannot solve on its own: when sever
 
 == Storage Organization and Integrity
 
-When the nameserver receives a request from the client to store a file (the file size is given inside the client's request), it first asks the chunkservers how much space they have used with a dedicated request `getall_storage`. Then, the nameserver simulates the best chunk distribution among the chunkservers:
+When the nameserver receives a request from the client to store a file (the client has already computed the number of chunks itself, from the file's size on disk, and sends that count — not the raw byte size — inside the request), it first asks every chunkserver how many chunks it is already holding, with a dedicated request `getall_storage` — each chunkserver just counts its own `.bin` files, so the nameserver only ever learns a *chunk count*, never an actual byte count, which is good enough since every chunk is the same fixed `CHUNK_SIZE`. It then simulates the best placement: for each chunk to allocate, it picks whichever `min(N_REPLICAS, available chunkservers)` chunkservers currently hold the *fewest* chunks, and immediately bumps their simulated counts so the next chunk's pick already accounts for the ones just assigned:
 ```python
+chunks_held = get_chunk_counts_from_every_chunkserver()
+servers_number = min(len(chunks_held), N_REPLICAS)   # fewer chunkservers than N_REPLICAS? use what's there
 chunk_bindings = []
 for chunk in chunks:
-  chunkservers_indices = np.argsort(chunkservers_storage_bytes)
-  for i in range(n_replicas):
-    chunk_bindings.append(chunkservers_indices[i])
-    chunkservers_storage_bytes[chunkservers_indices[i]]+=CHUNK_SIZE
+    chosen = argsort(chunks_held)[:servers_number]    # the servers_number least-loaded chunkservers
+    chunk_bindings.append(chosen)
+    for server in chosen:
+        chunks_held[server] += 1                      # simulated for the *next* chunk's pick, not yet real
 ```
 Right after that, the nameserver asks the chunkservers to allocate the chunks (within a directory lock named `dir_lock`, creating chunk files without actually writing anything inside yet), and once it succeeds, it generates a unique, incrementing *file ID* and stores the client's name, the filename, and the precise chunk locations under that ID:
 ```python
@@ -190,7 +192,7 @@ Right after that, the nameserver asks the chunkservers to allocate the chunks (w
   }
 }
 ```
-The file ID, rather than the `(clientname, filename)` pair, is the real identity of a stored file: a client may write two different files under the same name, each getting its own fresh ID and both being kept. It is sent back to the client as part of the JSON reply, and the client prints it as a receipt. `read` and `lsf` still take a plain filename, though — the nameserver resolves it internally to the *most recently written* file with that name for that client (older copies remain reachable only by the ID printed at write time).
+The file ID is the real identity of a stored file: a client may write two different files under the same name, each getting its own fresh ID and both being kept. It is sent back to the client as part of the JSON reply, and the client prints it as a receipt. `read` and `lsf` still take a plain filename for convenience, though — the nameserver resolves it internally to the *most recently written* file with that name for that client (older copies remain reachable only by the ID printed at write time).
 
 The client then writes each chunk through *pipelined replication*: rather than sending the chunk's bytes to every replica itself (was the first implementation), the client sends them _once_, to the first chunkserver in that chunk's replica list, together with the list of the *remaining* replicas as an extra `forward_to` field in the write header:
 ```python
@@ -204,14 +206,55 @@ The chunkserver's storage layout is the following:
 
 ```text
 chunkserver_storage
+├── 0.bin
 ├── 1.bin
 ├── 2.bin
-├── 3.bin
 ├── ...
 └── checksum.txt
 ```
+(chunk files are numbered from `0`, the way `process_allocate_request`'s `file_index` assigns them — the real `storage/ds1/` listing shown in the Demonstration section above confirms this: `0.bin, 1.bin, 2.bin, 3.bin`.)
 
-When the client asks to read a specific file or specific byte range, the nameserver sends the whole file's metadata back to it, and the client computes which chunks are actually needed. For each one, the chunkserver verifies two independent invariants before sending it back: the chunk's *length* on disk must match the length recorded at write time, and its *MD5 checksum* must match too — length first, since it's a cheap comparison that can fail fast on a truncated or padded chunk without paying for a hash over the whole chunk; the checksum still catches same-length corruption that a length check alone cannot. Only once both checks pass are the bytes sent back to the client, which finally extracts the requested bytes from them.
+When the client asks to read a specific file or specific byte range, the nameserver sends back the whole file's metadata — the ordered list of chunks, each carrying up to `N_REPLICAS` chunkserver locations — and the client works out which of those chunks actually overlap the requested range.
+
+For each needed chunk, in order, the client does not pick a replica ahead of time: it tries the replicas one at a time, in the order the nameserver listed them, until one of them actually hands back a good copy of the chunk:
+```python
+for i, replicas in enumerate(chunks_needed):
+    data = None
+    for replica in replicas:                 # try every replica for this chunk, in order
+        try:
+            with connect(replica.host, replica.port) as sock:
+                send(sock, {'action': 'read', 'file_index': replica.file_index})
+                response = recv(sock)
+                if response['status'] != 'ok':
+                    continue                  # this replica is missing/corrupted: try the next one
+                data = recv_bytes(sock)
+                break                         # got a good copy, stop trying replicas for this chunk
+        except ConnectionError:
+            continue                          # this replica is unreachable: try the next one
+
+    if data is None:
+        raise RuntimeError(f"chunk {i} was unavailable or corrupted on every replica")
+
+    out_file.write(trim_to_requested_range(data, i))   # see below
+    # ... then the loop moves on to chunk i + 1
+```
+
+A chunkserver never hands back a chunk without checking it first. Before replying, it re-derives the same two invariants the writer recorded in `checksum.txt` at write time — the chunk's *length* and its *MD5 checksum* — and compares them against what is actually on disk right now:
+```python
+def process_read_request(file_index):
+    chunk = read_bytes(f"{file_index}.bin")
+    ref_checksum, ref_length = checksum_file[file_index]   # recorded when the chunk was written
+
+    if len(chunk) != ref_length:            # cheap check first: catches truncation/padding fast
+        return {'status': 'nok', 'payload': 'unexpected length'}
+    if md5(chunk) != ref_checksum:          # only hash the chunk once the length already matched
+        return {'status': 'nok', 'payload': 'corrupted'}
+
+    return {'status': 'ok'}, chunk          # only a chunk that passes both checks is sent back
+```
+A chunkserver that fails either check replies `nok` instead of the bytes, which is exactly what sends the client's loop above on to the next replica for that same chunk — a single bad or unreachable replica never fails the read outright, as long as at least one of its siblings still has a good copy. Only when *every* replica of a chunk fails does the client give up on the whole read: the `RuntimeError` above is caught further up in `send_read`, which deletes the partial output file rather than leaving a truncated one behind.
+
+Once a chunk is retrieved, the client trims it to the requested byte range — the full chunk in the middle of the range, only the tail of the first chunk and the head of the last one at the edges — appends it to the output file, frees it, and moves on to the next chunk, until every needed chunk has been fetched and the requested range is fully reassembled on disk.
 
 == Handling exceptions
 
