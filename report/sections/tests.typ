@@ -1,6 +1,10 @@
 // ---------- 4. Tests and performance ----------
 = Tests and Performance
 
+== Tests
+
+A small set of CLI-level tests (`tests/test_cli.py`) exercises `ls`, `write`, `lsf`, and `read` directly through the same interface a user would type, against a fixture that boots a full in-process cluster (one name server, several chunkservers, one or more clients) over real — if local — TCP sockets. Rather than aiming for exhaustive coverage, each command gets one straightforward case and one deliberately awkward one: an empty cluster for `ls`, a zero-byte file for `write`, and for `read`, a full round trip, a byte range that spans a chunk boundary, and two different flavors of "nothing there" (an unknown client, and a client that exists but never wrote anything). The last of those surfaced a real bug while it was being written: reading a file for a client that had never written anything indexed straight into the name server's lookup table without checking the key existed first, raising an uncaught exception on the server and leaving the client hanging until its request timed out, instead of failing cleanly. The fix was a one-line `self.lut.get(clientname, {})` guard.
+
 == Performance
 
 To get a concrete sense of the overhead introduced by the JSON control-plane traffic and the thread-per-connection model, a small benchmark drives the CLI directly (the same mechanism the test suite uses) and times the `write`/`read` commands for synthetic random payloads of increasing size, over loopback TCP on a single machine, with `N_REPLICAS = 3`, after switching replication from client-driven to chunkserver-pipelined (see Architecture):

@@ -118,10 +118,19 @@
 #include "sections/conclusion.typ"
 
 // ============================================================
-//  Bibliography (optional — create refs.bib)
+//  Bibliography
 // ============================================================
-// #pagebreak()
-// #bibliography("refs.bib", style: "ieee", title: "References")
+// Locally overrides the level-1 heading rule above (which forces a page
+// break) just for this one heading, so References can continue on the
+// Conclusion's page instead of always starting a fresh one.
+#[
+  #show heading.where(level: 1): it => {
+    v(0.5em)
+    text(size: 14pt, it)
+    v(0.3em)
+  }
+  #bibliography("refs.bib", style: "ieee", title: "References")
+]
 
 // ============================================================
 //  Appendices (optional)

@@ -180,3 +180,48 @@ def test_lsf_unknown_client_is_a_noop(running_cli, capsys):
     capsys.readouterr()
     running_cli.onecmd("lsf nobody")
     assert capsys.readouterr().out == ""
+
+
+# ---------------------------------------------------------------- ls / write / read: normal + edge cases
+
+def test_ls_with_nothing_created(cli, capsys):
+    capsys.readouterr()
+    cli.onecmd("ls")
+    assert "Error" not in capsys.readouterr().out
+
+
+def test_write_empty_file(running_cli, tmp_path, capsys):
+    capsys.readouterr()
+    running_cli.onecmd(f"write alice {write_file(tmp_path, b'')}")
+    assert "Error" not in capsys.readouterr().out
+    running_cli.onecmd("lsf alice")
+    assert "data.txt" in capsys.readouterr().out
+
+
+def test_read_full_file_round_trip(running_cli, tmp_path):
+    content = bytes(i % 251 for i in range(CHUNK_SIZE * 2 + 37))   # spans 3 chunks
+    running_cli.onecmd(f"write alice {write_file(tmp_path, content)}")
+    running_cli.onecmd("read alice data.txt 0 -1")
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == content
+
+
+def test_read_partial_range_across_chunks(running_cli, tmp_path):
+    content = bytes(i % 251 for i in range(CHUNK_SIZE + 500))      # one full chunk, one partial
+    running_cli.onecmd(f"write alice {write_file(tmp_path, content)}")
+
+    begin, end = CHUNK_SIZE - 10, CHUNK_SIZE + 10                  # spans the chunk boundary
+    running_cli.onecmd(f"read alice data.txt {begin} {end}")
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == content[begin:end]
+
+
+def test_read_unknown_client_is_a_noop(running_cli, capsys):
+    capsys.readouterr()
+    running_cli.onecmd("read nobody data.txt 0 -1")
+    assert "doesn't exist" in capsys.readouterr().out
+    assert not (Path("storage") / "nobody").exists()
+
+
+def test_read_file_for_client_with_no_writes_is_a_noop(running_cli, capsys):
+    capsys.readouterr()
+    running_cli.onecmd("read alice never_written.txt 0 -1")
+    assert "no such filename" in capsys.readouterr().out

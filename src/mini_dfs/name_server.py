@@ -119,7 +119,7 @@ class NameServer():
 
     def process_read_request(self, req, conn: utils.QueueConn):
         clientname, filename = req['clientname'], req['filename']
-        if (filename not in self.lut[clientname]):      # We suppose clientname is always in the lut.
+        if (filename not in self.lut.get(clientname, {})):
             conn.reply(req, {"status":"nok", "payload":"no such filename found in the database !"})
             return
         conn.reply(req, {"status":"ok", "payload":self.lut[clientname][filename]["chunk_handles"]})
