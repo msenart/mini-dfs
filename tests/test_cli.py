@@ -144,14 +144,16 @@ def test_write_with_a_single_chunkserver(cli, tmp_path):
     assert len(all_chunks(cli)) == 3         # 2 written chunks + 1 allocated but empty (the client asks for size/CHUNK_SIZE + 1)
 
 
-def test_write_same_file_twice(running_cli, tmp_path, capsys):
+def test_write_same_filename_twice_is_allowed(running_cli, tmp_path, capsys):
     path = write_file(tmp_path, b"z" * (CHUNK_SIZE + 1))
     running_cli.onecmd(f"write alice {path}")
-    before = bin_files(running_cli)
+    before = all_chunks(running_cli)
     capsys.readouterr()
     running_cli.onecmd(f"write alice {path}")
-    assert "already exists" in capsys.readouterr().out
-    assert bin_files(running_cli) == before
+    out = capsys.readouterr().out
+    assert "already exists" not in out
+    assert "written successfully" in out
+    assert len(all_chunks(running_cli)) == 2 * len(before)   # each write gets its own file ID, both copies kept
 
 
 def test_lsf_is_per_client(cli, tmp_path, capsys):

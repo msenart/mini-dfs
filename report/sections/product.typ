@@ -45,8 +45,9 @@ All entities have started !
 [NameServer ns1, localhost, 8080]
 (mini-dfs) write alice project_ict_3.pdf
 [NameServer ns1, localhost, 8080] received an allocation request of 2 chunks
+[Client alice, localhost, 8080]: project_ict_3.pdf written successfully as file_id=1 (2 chunk(s)).
 (mini-dfs) lsf alice
-[Client alice, localhost, 8080]: project_ict_3.pdf
+[Client alice, localhost, 8080]: id=1 project_ict_3.pdf
 (mini-dfs) read alice project_ict_3.pdf 0 -1
 File written to storage\alice\project_ict_3.pdf
 (mini-dfs) read alice project_ict_3.pdf 1 11

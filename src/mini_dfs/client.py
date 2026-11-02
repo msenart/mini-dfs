@@ -51,13 +51,13 @@ class Client():
         print(f"{self} has received: {req["payload"]}")
 
     def process_list_request(self, req):
-        filenames = req["filenames"]
-        if len(filenames) == 0:
+        files = req["files"]
+        if len(files) == 0:
             print(f"{self} has no file stored in the database.")
             return
         else:
-            for file in filenames:
-                print(f"{self}: {file}")
+            for file in files:
+                print(f"{self}: id={file['file_id']} {file['filename']}")
             return
 
     def send_message(self, msg):
@@ -90,30 +90,37 @@ class Client():
         if response.get("status") != "ok":
             print(f"{self}: {response.get('message')}")
             return
+        file_id = response["file_id"]
         tot_chunks_mds = response["chunks"]
 
         chunks = []
         with open(path, "rb") as file:
             while buf := file.read(CHUNK_SIZE):
                 chunks.append(buf)
-        for chunk, chunk_mds in zip(chunks, tot_chunks_mds):     # loop over all chunks
-            # Pipelined replication: the chunk is only sent once, to the first replica.
-            # That chunkserver forwards it (and the remaining targets) to the next one,
-            # and so on, instead of the client sending the same bytes N_REPLICAS times.
-            primary, *forward_to = chunk_mds
-            host, port, file_index = primary["host"], primary["port"], primary["file_index"] # file_index refers to the allocated chunk in the chunkserver.
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as chunkserver_sock:
-                chunkserver_sock.connect((host, port))
-                req = {
-                    "action":"write",
-                    "file_index":file_index,
-                    "forward_to":forward_to,
-                }
-                utils.send_data(chunkserver_sock, req)
-                utils.send_data(chunkserver_sock, chunk)
-                response = json.loads(utils.recv_data(chunkserver_sock, bytes=False))
-                if response["status"] != "ok":
-                    raise BrokenPipeError(f"the replica chain starting at {host}:{port} couldn't write the chunk : {response.get('payload')}")
+        try:
+            for chunk, chunk_mds in zip(chunks, tot_chunks_mds):     # loop over all chunks
+                # Pipelined replication: the chunk is only sent once, to the first replica.
+                # That chunkserver forwards it (and the remaining targets) to the next one,
+                # and so on, instead of the client sending the same bytes N_REPLICAS times.
+                primary, *forward_to = chunk_mds
+                host, port, file_index = primary["host"], primary["port"], primary["file_index"] # file_index refers to the allocated chunk in the chunkserver.
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as chunkserver_sock:
+                    chunkserver_sock.connect((host, port))
+                    req = {
+                        "action":"write",
+                        "file_index":file_index,
+                        "forward_to":forward_to,
+                    }
+                    utils.send_data(chunkserver_sock, req)
+                    utils.send_data(chunkserver_sock, chunk)
+                    response = json.loads(utils.recv_data(chunkserver_sock, bytes=False))
+                    if response["status"] != "ok":
+                        raise BrokenPipeError(f"the replica chain starting at {host}:{port} couldn't write the chunk : {response.get('payload')}")
+        except OSError as ex:
+            print(f"{self}: couldn't write {path} : {ex}")
+            return
+
+        print(f"{self}: {path} written successfully as file_id={file_id} ({len(chunks)} chunk(s)).")
 
     def send_read(self, filename, offset_begin=0, offset_end=0):
         req = {

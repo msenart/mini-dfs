@@ -5,12 +5,12 @@
 
 The chunk layer scales the way GFS's does: storage capacity and write bandwidth grow by adding chunkservers, and the nameserver never touches file bytes, so it never becomes a data-path bottleneck. Three aspects limit how far this implementation specifically scales, though:
 
-- *Metadata is not persisted.* The nameserver keeps its entire file-to-chunk lookup table (`self.lut`) as a plain in-memory `dict`. If the nameserver process dies, every chunk byte on every chunkserver becomes unreachable, even though the data itself is untouched — there is no operation log or checkpoint to replay, unlike GFS's master.
+- *Metadata is not persisted.* The nameserver keeps its entire file-ID-to-chunk lookup table (`self.files`) as a plain in-memory `dict`. If the nameserver process dies, every chunk byte on every chunkserver becomes unreachable, even though the data itself is untouched — there is no operation log or checkpoint to replay, unlike GFS's master.
 - *No failure detection.* There is no heartbeat between the nameserver and the chunkservers; a chunkserver that silently dies is only noticed on the next request that happens to target it, and nothing re-replicates the copies it was holding.
 - *The metadata path is serial* (see Performance): querying $N$ chunkservers for free space costs $N$ sequential round trips today, so adding chunkservers to gain write throughput currently backfires.
 
 These problems are minor and well localized, rather than vague project directions. These are potential tracks that would help implement what is above:
-- persistence would extend `NameServer.lut`'s read/write path with a simple append-only log or periodic snapshot to disk;
+- persistence would extend `NameServer.files`'s read/write path with a simple append-only log or periodic snapshot to disk;
 - heartbeats could reuse the existing `message` request/response shape on a timer, from each chunkserver to the nameserver;
 - re-replication would extend `process_allocate_request` to notice a chunkserver drop out and pick a replacement;
 - parallelizing `getall_storage` only requires replacing its sequential `for` loop with one request per chunkserver connection fired concurrently, then gathered.

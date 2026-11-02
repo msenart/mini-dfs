@@ -177,18 +177,20 @@ for chunk in chunks:
     chunk_bindings.append(chunkservers_indices[i])
     chunkservers_storage_bytes[chunkservers_indices[i]]+=CHUNK_SIZE
 ```
-Right after that, the nameserver asks the chunkservers to allocate the chunks (within a directory lock named `dir_lock`, creating chunk files without actually writing anything inside yet), and once it succeeds, it stores in a lookup table the client's name, the filename, and the precise chunk locations:
+Right after that, the nameserver asks the chunkservers to allocate the chunks (within a directory lock named `dir_lock`, creating chunk files without actually writing anything inside yet), and once it succeeds, it generates a unique, incrementing *file ID* and stores the client's name, the filename, and the precise chunk locations under that ID:
 ```python
 {
-  'alice':{
-  'filename':[
+  1:{
+    'clientname':'alice',
+    'filename':'filename',
+    'chunk_handles':[
       {'host':CHUNKSERVER_HOST, 'port':CHUNKSERVER_PORT, file_index: 0},
       {'host':CHUNKSERVER_HOST, 'port':CHUNKSERVER_PORT, file_index: 1},...
     ]
   }
 }
 ```
-It then sends this placement back to the client as a JSON message.
+The file ID, rather than the `(clientname, filename)` pair, is the real identity of a stored file: a client may write two different files under the same name, each getting its own fresh ID and both being kept. It is sent back to the client as part of the JSON reply, and the client prints it as a receipt. `read` and `lsf` still take a plain filename, though — the nameserver resolves it internally to the *most recently written* file with that name for that client (older copies remain reachable only by the ID printed at write time).
 
 The client then writes each chunk through *pipelined replication*: rather than sending the chunk's bytes to every replica itself (was the first implementation), the client sends them _once_, to the first chunkserver in that chunk's replica list, together with the list of the *remaining* replicas as an extra `forward_to` field in the write header:
 ```python

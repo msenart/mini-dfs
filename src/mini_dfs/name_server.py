@@ -14,8 +14,9 @@ class NameServer():
         self.server_port = server_port
         self.client_sock = None
         self.server_sock = None
-        self.lut = dict()
-        self.lut_lock:threading.Lock=threading.Lock()
+        self.files = dict()                                 # file_id -> {clientname, filename, chunk_handles}
+        self.files_lock:threading.Lock=threading.Lock()
+        self._next_file_id = itertools.count(1)
         self.chunk_servers_conns = []
         self.chunk_servers_conns_lock:threading.Lock=threading.Lock()
         self.is_running = False
@@ -112,27 +113,26 @@ class NameServer():
 
     def process_list_request(self, req, client_conn: utils.QueueConn):
         client_name = req["clientname"]
-        filenames = []
-        if client_name in self.lut:
-            filenames = list(self.lut[client_name].keys())
-        client_conn.reply(req, {"action":"list", "filenames":filenames})
+        with self.files_lock:
+            entries = [{"file_id": fid, "filename": rec["filename"]}
+                       for fid, rec in self.files.items() if rec["clientname"] == client_name]
+        client_conn.reply(req, {"action":"list", "files":entries})
 
     def process_read_request(self, req, conn: utils.QueueConn):
         clientname, filename = req['clientname'], req['filename']
-        if (filename not in self.lut.get(clientname, {})):
+        match = None
+        with self.files_lock:
+            for rec in self.files.values():     # dicts preserve insertion order: last match is the most recent write
+                if rec["clientname"] == clientname and rec["filename"] == filename:
+                    match = rec
+        if match is None:
             conn.reply(req, {"status":"nok", "payload":"no such filename found in the database !"})
             return
-        conn.reply(req, {"status":"ok", "payload":self.lut[clientname][filename]["chunk_handles"]})
+        conn.reply(req, {"status":"ok", "payload":match["chunk_handles"]})
 
     def process_allocate_request(self, req, client_conn: utils.QueueConn):
         client_name, chunk_number, filename = req["clientname"], req["chunk_number"], req["filename"]
         print(f"{self} received an allocation request of {chunk_number} chunks")
-
-        # if the file already exists, return
-        with self.lut_lock:
-            if filename in self.lut.get(client_name, {}):
-                client_conn.reply(req, {"status": "nok", "message": f"{filename} already exists in the database!"})
-                return
 
         # find the best chunk configuration according to the servers storage
         with self.chunk_servers_conns_lock:
@@ -173,7 +173,8 @@ class NameServer():
             client_conn.reply(req, {"status": "nok", "message": f"{filename} couldn't be written: {e}"})
             return
 
-        with self.lut_lock:
-            self.lut.setdefault(client_name, {})[filename] = {"chunk_handles": chunks}
+        with self.files_lock:
+            file_id = next(self._next_file_id)
+            self.files[file_id] = {"clientname": client_name, "filename": filename, "chunk_handles": chunks}
 
-        client_conn.reply(req, {"status": "ok", "chunks": chunks})
+        client_conn.reply(req, {"status": "ok", "file_id": file_id, "chunks": chunks})
