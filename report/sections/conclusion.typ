@@ -1,4 +1,4 @@
-there// ---------- 5. Limitations and conclusion ----------
+// ---------- 5. Limitations and conclusion ----------
 = Limitations and Conclusion
 
 == Scalability
@@ -19,9 +19,14 @@ These problems are minor and well localized, rather than vague project direction
 
 mini-dfs set out to reproduce, at a small scale, the core idea behind the Google File System: keep metadata and data on separate paths, let a single coordinator place data without ever carrying it, and replicate it the way GFS does rather than the way that's easiest to code. All three are implemented and demonstrated end to end: a client can write a file that gets chunked and replicated across several chunkservers chosen by a simple least-loaded heuristic, with the chunkservers themselves pipelining each chunk on to its other replicas instead of the client sending it `N_REPLICAS` times, and later read it back byte-exact and checksum-verified from any offset, entirely over hand-rolled TCP sockets and JSON framing.
 
-Building it surfaced three problems that make distributed storage hard even at this scale: making sure a reply reaches the thread that is actually waiting for it when several requests share one socket connection (solved here with `QueueConn`'s request-id based dispatch, detailed in the Architecture section); keeping the coordinator off the data path without starving it of the information it needs to place data well (solved here, imperfectly, see Scalability, with a synchronous storage poll that does not yet scale past a handful of chunkservers); and moving replication bandwidth off the client without being able to show the improvement on a single-machine benchmark (solved in the code, and deliberately reported as not shown by the wall-clock numbers in the Performance section, a reminder that a benchmark can be honest about its own blind spots instead of overclaiming).
+Building it surfaced three problems that make distributed storage hard even at this scale:
+- Making sure a reply reaches the thread that is actually waiting for it, when several requests share one socket connection — solved here with `QueueConn`'s request-id based dispatch, detailed in the Architecture section.
+- Keeping the coordinator off the data path without starving it of the information it needs to place data well — solved here, imperfectly: see Scalability, with a synchronous storage poll that does not yet scale past a handful of chunkservers.
+- Moving replication bandwidth off the client without being able to show the improvement on a single-machine benchmark — solved in the code, and deliberately reported as not shown by the wall-clock numbers in the Performance section, a reminder that a benchmark can be honest about its own blind spots instead of overclaiming.
 
-The simplifications still accepted (no metadata persistence, no heartbeats, a replication chain that forwards a whole chunk at a time rather than streaming it) are among the pieces GFS spends the most engineering effort on. In hindsight, that was a reasonable way to spend a limited project budget: get the core data path right and measurable first, fix the parts that were clearly wrong once understood (client-driven replication among them), and leave the remaining work clearly scoped.
+The simplifications still accepted (no metadata persistence, no heartbeats, a replication chain that forwards a whole chunk at a time rather than streaming it) are among the pieces GFS spends the most engineering effort on.
+
+Security was outside this project's scope entirely, and is worth naming explicitly rather than leaving implicit: every actor talks in plaintext (JSON headers and raw chunk bytes travel unencrypted over TCP, readable and tamperable by anyone on the path), nothing authenticates who is really behind a given `clientname` (it is just a field a client fills in on its own requests, so one client can freely claim another's name), and every actor trusts its peers completely (a chunkserver executes whatever the nameserver tells it to, and the nameserver takes a chunkserver's reported free storage at face value). None of it is remediated here; a real deployment would need at least transport encryption and peer authentication before any of the above would be safe to expose beyond a trusted lab network.
 
 == Contributions
 

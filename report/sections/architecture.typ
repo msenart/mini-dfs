@@ -70,6 +70,14 @@ The project takes the form of a Python module which uses built-in Python modules
 
 == Metadata Traffic Management
 The network traffic is organized with TCP connections only. To establish a connection between two actors, one socket listens and the other calls it to connect.
+
+For the caller to connect at all, it has to already know which port the listener is bound to. This is why the nameserver's two listening ports are fixed in advance rather than discovered at runtime: they are read from environment variables in `globals.py`, defaulting respectively to `CLIENT_PORT = 8080` for clients and `CHUNK_SERVER_PORT = 8081` for chunkservers.
+```python
+CLIENT_PORT = int(os.environ.get("CLIENT_PORT", 8080))
+CHUNK_SERVER_PORT = int(os.environ.get("CHUNK_SERVER_PORT", 8081))
+```
+A chunkserver's own client-facing port, `CHUNK_CLIENT_PORT`, does not need to be fixed in the same way, since nothing has to connect to it before the nameserver even knows it exists: it defaults to `0`, letting the OS assign a free port, which the chunkserver then reads back off its own socket and reports to the nameserver; the nameserver in turn hands it to the client as part of the chunk's location, so the client always learns it dynamically rather than assuming a fixed value.
+
 Once the connection is accepted on both sides, it is handled in a dedicated socket, with the listening side also starting a dedicated thread to keep listening on other incoming connections. It is shown below.
 #v(0.5em)
 - Caller:
