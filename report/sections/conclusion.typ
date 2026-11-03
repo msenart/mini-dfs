@@ -9,7 +9,9 @@ The chunk layer scales the way GFS's does: storage capacity and write bandwidth 
 - No failure detection: there is no heartbeat between the nameserver and the chunkservers; a chunkserver that silently dies is only noticed on the next request that happens to target it, and nothing re-replicates the copies it was holding.
 - The metadata path is serial (see Performance): querying $N$ chunkservers for free space costs $N$ sequential round trips today, so adding chunkservers to gain write throughput currently backfires.
 
-These problems are minor and well localized, rather than vague project directions. These are potential tracks that would help implement what is above:
+None of these limitations is minor for a production system — persistence and failure
+recovery are among the parts GFS spends the most effort on — but each one sits in a
+known part of our code, so the extensions below are well scoped:
 - persistence would extend `NameServer.files`'s read/write path with a simple append-only log or periodic snapshot to disk;
 - heartbeats could reuse the existing `message` request/response shape on a timer, from each chunkserver to the nameserver;
 - re-replication would extend `process_allocate_request` to notice a chunkserver drop out and pick a replacement;
@@ -17,7 +19,7 @@ These problems are minor and well localized, rather than vague project direction
 
 == Conclusion
 
-mini-dfs set out to reproduce, at a small scale, the core idea behind the Google File System: keep metadata and data on separate paths, let a single coordinator place data without ever carrying it, and replicate it the way GFS does rather than the way that's easiest to code. All three are implemented and demonstrated end to end: a client can write a file that gets chunked and replicated across several chunkservers chosen by a simple least-loaded heuristic, with the chunkservers themselves pipelining each chunk on to its other replicas instead of the client sending it `N_REPLICAS` times, and later read it back byte-exact and checksum-verified from any offset, entirely over hand-rolled TCP sockets and JSON framing.
+mini-dfs set out to reproduce, at a small scale, the core idea behind the Google File System: keep metadata and data on separate paths, let a single coordinator place data without ever carrying it, and replicate it the way GFS does rather than the way that's easiest to code. All three are implemented and demonstrated end to end: a client can write a file that gets chunked and replicated across several chunkservers chosen by a simple least-loaded heuristic, with the chunkservers themselves pipelining each chunk on to its other replicas instead of the client sending it `N_REPLICAS` times, and later read it back either whole or as an arbitrary byte range (including ranges that span a chunk boundary), with each chunk's length and MD5 checksum verified before it is returned, entirely over hand-rolled TCP sockets and JSON framing.
 
 Building it surfaced three problems that make distributed storage hard even at this scale:
 - Making sure a reply reaches the thread that is actually waiting for it, when several requests share one socket connection — solved here with `QueueConn`'s request-id based dispatch, detailed in the Architecture section.

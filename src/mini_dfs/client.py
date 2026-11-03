@@ -17,7 +17,7 @@ class Client():
         self.storage_dir = os.path.join("storage", self.name)
 
     def __str__(self):
-        return f"[Client {self.name}, {self.host}, {self.nameserver_port}]"
+        return f"[Client {self.name}]"
 
     def start(self):
         if not os.path.exists(self.storage_dir):

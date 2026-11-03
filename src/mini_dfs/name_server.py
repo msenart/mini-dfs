@@ -22,7 +22,7 @@ class NameServer():
         self.is_running = False
 
     def __str__(self):
-        return f"[NameServer {self.name}, {self.host}, {self.client_port}]"
+        return f"[NameServer {self.name}]"
 
     def start(self):        
         self.client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

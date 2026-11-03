@@ -68,6 +68,10 @@ The project takes the form of a Python module which uses built-in Python modules
 - `socket` to establish TCP connections between the actors.
 - `threading` to make the different actors act in parallel.
 
+`mini-dfs` runs as one Python process in which the NameServer and the four
+ChunkServers are threads; the CLI runs in the same process.
+All traffic uses TCP over the loopback interface.
+
 == Metadata Traffic Management
 The network traffic is organized with TCP connections only. To establish a connection between two actors, one socket listens and the other calls it to connect.
 
@@ -275,7 +279,9 @@ Once a chunk is retrieved, the client trims it to the requested byte range (the 
 
 == Handling exceptions
 
-Exception handling might be the weakest part of the project. It was quite messy: as it was written in Python, we can't know at every moment which method could raise an Exception. This was all the more important since we have manipulated unstable objects such as threads and sockets. However, we could notice mainly three scenarios when exception handling can be well managed: 
+Exception handling might be the weakest part of the project. Python does not declare which exceptions a function may raise, and threads and sockets can fail at almost any call, so we concentrated on the failure points below and tested each of them. This was all the more important since we have manipulated unstable objects such as threads and sockets.
+
+We could notice mainly three scenarios when exception handling can be well managed: 
 - For socket instance handling: we have used the structure `with self.socket as sock:`
 - Whenever performing a network request: we wrap it in a `try:... except Exception as ex:... finally:...` to handle sudden disconnections.
 - Whenever we perform a network request that succeded, but the remote request performance failed: this happens when we want to store a file that is too heavy to be stored in the database. A JSON message `{'status':'nok', 'payload':<message>}` is returned to the sender, indicating through the payload that the operation has failed.

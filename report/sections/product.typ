@@ -53,7 +53,7 @@ All entities have started !
 
 === Chunk distribution and replica placement
 
-Inspecting `storage/dsN/` directly right after the write shows how the 5 chunks $times$ `N_REPLICAS` = 3 = 15 chunk copies actually landed: 4 on `ds1`, `ds2`, `ds3` each, and 3 on `ds4`, since the last chunk is small enough (186,268 bytes) that `ds4` wasn't picked as one of its 3 least-loaded replicas:
+Inspecting `storage/dsN/` directly right after the write shows how the 5 chunks $times$ `N_REPLICAS` = 3 = 15 chunk copies actually landed: 4 on `ds1`, `ds2`, `ds3` each, and 3 on `ds4`:
 
 #figure(
   table(

@@ -22,7 +22,7 @@ class ChunkServer():
         self.storage_dir = os.path.join("storage", self.name)
 
     def __str__(self):
-        return f"[ChunkServer {self.name}, {self.host}, {self.nameserver_port}]"
+        return f"[ChunkServer {self.name}]"
 
     def start(self):
         os.makedirs(self.storage_dir, exist_ok=True)
