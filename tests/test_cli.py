@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from mini_dfs.globals import CHUNK_SIZE
@@ -149,6 +150,24 @@ def test_read_full_file_round_trip(running_cli, tmp_path):
     running_cli.onecmd(f"write alice {write_file(tmp_path, content)}")
     running_cli.onecmd("read alice data.txt 0 -1")
     assert (Path("storage") / "alice" / "data.txt").read_bytes() == content
+
+
+def test_read_by_id_disambiguates_same_filename(running_cli, tmp_path, capsys):
+    first, second = b"a" * 10, b"b" * 10
+    capsys.readouterr()
+    running_cli.onecmd(f"write alice {write_file(tmp_path, first)}")
+    first_id = int(re.search(r"file_id=(\d+)", capsys.readouterr().out).group(1))
+    running_cli.onecmd(f"write alice {write_file(tmp_path, second)}")
+    second_id = int(re.search(r"file_id=(\d+)", capsys.readouterr().out).group(1))
+
+    running_cli.onecmd("read alice data.txt 0 -1")                 # plain filename -> most recent write
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == second
+
+    running_cli.onecmd(f"read alice {first_id} 0 -1")              # by id -> the older copy, otherwise unreachable
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == first
+
+    running_cli.onecmd(f"read alice {second_id} 0 -1")             # by id -> the newer copy still works too
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == second
 
 
 def test_read_partial_range_across_chunks(running_cli, tmp_path):

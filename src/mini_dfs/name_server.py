@@ -119,16 +119,24 @@ class NameServer():
         client_conn.reply(req, {"action":"list", "files":entries})
 
     def process_read_request(self, req, conn: utils.QueueConn):
-        clientname, filename = req['clientname'], req['filename']
-        match = None
-        with self.files_lock:
-            for rec in self.files.values():     # dicts preserve insertion order: last match is the most recent write
-                if rec["clientname"] == clientname and rec["filename"] == filename:
-                    match = rec
-        if match is None:
-            conn.reply(req, {"status":"nok", "payload":"no such filename found in the database !"})
-            return
-        conn.reply(req, {"status":"ok", "payload":match["chunk_handles"]})
+        clientname, file_id = req['clientname'], req.get('file_id')
+        if file_id is not None:
+            with self.files_lock:
+                match = self.files.get(file_id)
+            if match is None or match["clientname"] != clientname:
+                conn.reply(req, {"status":"nok", "payload":f"no file with id {file_id} found for this client !"})
+                return
+        else:
+            filename = req['filename']
+            match = None
+            with self.files_lock:
+                for rec in self.files.values():     # dicts preserve insertion order: last match is the most recent write
+                    if rec["clientname"] == clientname and rec["filename"] == filename:
+                        match = rec
+            if match is None:
+                conn.reply(req, {"status":"nok", "payload":"no such filename found in the database !"})
+                return
+        conn.reply(req, {"status":"ok", "payload":{"filename":match["filename"], "chunk_handles":match["chunk_handles"]}})
 
     def process_allocate_request(self, req, client_conn: utils.QueueConn):
         client_name, chunk_number, filename = req["clientname"], req["chunk_number"], req["filename"]

@@ -122,7 +122,6 @@
 #include "sections/architecture.typ"
 #include "sections/tests.typ"
 #include "sections/conclusion.typ"
-
 // ============================================================
 //  Bibliography
 // ============================================================

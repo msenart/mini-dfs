@@ -134,23 +134,29 @@ class CLI(cmd.Cmd):
 
     def do_read(self, args):
         """
-        Prints an existing file named <filename> from the database into the terminal.
-        Usage: read <client-name> <filename> <offset-begin> <offset-end>
+        Prints an existing file into the terminal, identified either by its filename
+        (resolved to the most recently written file with that name) or by its file id
+        (printed as a receipt when it was written; the only way to reach an older file
+        that shares its name with a more recent one).
+        Usage: read <client-name> <filename-or-file-id> <offset-begin> <offset-end>
         <offset-begin> is in [0, +inf)
         <offset-end> is in [0, +inf). If =-1, prints from <offset-begin> to end of file.
         """
         if len(args.split()) != 4:
-            print("Usage: read <client-name> <filename> <offset-begin> <offset-end>")
+            print("Usage: read <client-name> <filename-or-file-id> <offset-begin> <offset-end>")
             return
-            
-        actor_name, path, offset_begin, offset_end = args.split()
-        filename = os.path.basename(path)
+
+        actor_name, target, offset_begin, offset_end = args.split()
         if not any(c.name == actor_name for c in self.clients):
             print(f"client name {actor_name} doesn't exist !")
             return
+        try:
+            file_id, filename = int(target), None
+        except ValueError:
+            file_id, filename = None, os.path.basename(target)
         for actor in self.clients:
             if actor.name == actor_name:
-                actor.send_read(filename, int(offset_begin), int(offset_end))
+                actor.send_read(file_id, filename, int(offset_begin), int(offset_end))
                 return
     
     def do_lsf(self, args):

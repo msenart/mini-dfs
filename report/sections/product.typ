@@ -27,29 +27,26 @@ read alice big_demo.bin 2097136 2097168     # read 32 bytes straddling the chunk
 
 Running these exact commands against a real 8.58 MB file, `big_demo.bin` (the demo PDF `project_ict_3.pdf` concatenated with itself four times end-to-end, so the content is genuine file bytes rather than synthetic filler, and large enough to split into 5 chunks of `CHUNK_SIZE` (2 MiB) each, the last one partial), gives:
 
-```text
-(mini-dfs) macro
-[ChunkServer ds1, localhost, None] created.
-[ChunkServer ds2, localhost, None] created.
-[ChunkServer ds3, localhost, None] created.
-[ChunkServer ds4, localhost, None] created.
-[Client alice, localhost, None] created.
-[NameServer ns1, localhost, 8080] created.
-All clients and chunkservers have been bound to the nameserver !
-All entities have started !
-(mini-dfs) ls
-[ChunkServer ds1, localhost, 8081]
-[ChunkServer ds2, localhost, 8081]
-[ChunkServer ds3, localhost, 8081]
-[ChunkServer ds4, localhost, 8081]
-[Client alice, localhost, 8080]
-[NameServer ns1, localhost, 8080]
-(mini-dfs) write alice big_demo.bin
-[NameServer ns1, localhost, 8080] received an allocation request of 5 chunks
-[Client alice, localhost, 8080]: big_demo.bin written successfully as file_id=1 (5 chunk(s)).
-(mini-dfs) lsf alice
-[Client alice, localhost, 8080]: id=1 big_demo.bin
-```
+#figure(
+  image("../media/terminal1.png", width: 80%)
+)
+
+A new folder named `storage/` (automatically destroyed when exiting the program) should appear, containing the memory of the whole simulation. After these commands, you should get this:
+
+#figure(
+  image("../media/terminal2.png", width: 30%)
+)
+
+And last, in the `checksum.txt` for `ds1` and `ds4`, you should have this:
+
+#figure(
+  image("../media/terminal3.png", width: 50%),
+  caption: "checksum.txt of ds1: should contain 4 checksums (each line is: <md5 checksum> <number of bytes>). And 2097152 = 1024 * 1024 * 2 = 2 MB."
+)
+#figure(
+  image("../media/terminal4.png", width: 50%),
+  caption: "checksum.txt of ds4: should contain 3 checksums, and the first checksum is the second checksum of ds1."
+)
 
 === Chunk distribution and replica placement
 

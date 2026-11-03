@@ -38,9 +38,9 @@ Security was outside this project's scope entirely, and is worth naming explicit
   stroke: 0.5pt + luma(150),
   inset: 6pt,
   table.header([*Member*], [*Contribution*]),
-  [Mathieu SENART], [Wrote the `allocate` and `write` request handling, coordinated the codebase for the final report.],
+  [Mathieu SENART], [Wrote the report, Wrote the `allocate` and `write` request handling],
   [Prusothman VIGNESWARAN], [Initiated the codebase architecture: wrote the first files and classes, and the socket usage.],
   [Marc JUSTO ARBONA], [Wrote the `read` request handling, coded the interactive CLI.],
-  [David MUY], [Wrote the report.],
+  [David MUY], [Coordinated the codebase for the final report.],
 )
 

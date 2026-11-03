@@ -122,17 +122,18 @@ class Client():
 
         print(f"{self}: {path} written successfully as file_id={file_id} ({len(chunks)} chunk(s)).")
 
-    def send_read(self, filename, offset_begin=0, offset_end=0):
-        req = {
-            'action': 'read',
-            'filename': filename,
-            'clientname': self.name
-        }
+    def send_read(self, file_id=None, filename=None, offset_begin=0, offset_end=0):
+        req = {'action': 'read', 'clientname': self.name}
+        if file_id is not None:
+            req['file_id'] = file_id
+        else:
+            req['filename'] = filename
         response = self.conn.request(req)
         if response["status"] != "ok":
             print(response["payload"])
             return
-        chunks_mds = response["payload"]
+        filename = response["payload"]["filename"]
+        chunks_mds = response["payload"]["chunk_handles"]
 
         if offset_end == -1:
             index_begin = offset_begin//CHUNK_SIZE
