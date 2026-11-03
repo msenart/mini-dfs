@@ -12,7 +12,6 @@
 #let titre = "mini-dfs"
 #let sous-titre = "A Simplified Distributed File System Inspired by the Google File System"
 #let auteurs = ("Mathieu SENART, Prusothman VIGNESWARAN, Marc JUSTO ARBONA, David MUY",) // add more names here if this was a team project
-#let organisme = "Shanghai Jiaotong University"
 #let date = datetime.today().display("[month repr:long] [day], [year]")
 // ---------- Global settings ----------
 #set document(title: titre, author: auteurs)
@@ -58,7 +57,14 @@
 #page(numbering: none)[
   #align(center)[
     #v(2cm)
-    #text(size: 12pt)[#organisme]
+    // SJTU logo, cropped out of the full-page media/sjtubannerred.svg banner
+    // (its drawn content only occupies the x:[35,695] / y:[150,365] pt region)
+    // and scaled down from that native size.
+    #scale(38.65%, reflow: true)[
+      #box(width: 660pt, height: 215pt, clip: true)[
+        #place(top + left, dx: +25pt, dy: -150pt, image("media/sjtubannerred.svg", width: 595.276pt, height: 841.89pt))
+      ]
+    ]
     #v(3cm)
     #line(length: 60%, stroke: 1pt)
     #v(0.5cm)
