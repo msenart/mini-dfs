@@ -104,10 +104,18 @@ To send a raw byte chunk, the sender (client or chunkserver) first sends a JSON 
 'E8In&56"&"rbiZIUZ_...'                       # raw bytes
 ```
 
-The sockets are organized this way:
-- Client $<->$ Nameserver: the client has the nameserver socket as an attribute, whereas the nameserver handles the client socket in a dedicated thread that always listens to it.
-- Nameserver $<->$ Chunkserver: since the nameserver has to compute the best placement for an incoming file, it needs to know about all the chunkservers from a single thread, so the nameserver groups every chunkserver socket into a list attribute. Each chunkserver, conversely, only has the nameserver socket as a single attribute.
-- Client $<->$ Chunkserver: a connection is opened and closed on the fly to write and read chunks directly from the source. For a given connection, the chunkserver is always the listener; the caller is usually the client, but during pipelined writes a chunkserver forwarding a chunk to the next replica becomes the caller itself, reconnecting to that next chunkserver's very same client-facing listening socket.
+Each actor keeps its persistent connections in a handful of socket attributes, each either calling out to connect or listening for incoming connections:
+- *Client*
+  - `conn`: a single calling socket, connected to the nameserver's listening socket. Held for the client's whole runtime; the client never listens for anything.
+- *NameServer*
+  - `client_sock`: a listening socket bound to the client port. Every accepted client connection is handed off to its own dedicated thread, which keeps listening on it.
+  - `server_sock`: a listening socket bound to the chunkserver port, dedicated to incoming chunkserver connections.
+  - `chunk_servers_conns`: a list attribute gathering every accepted chunkserver connection. It has to be a list, and not one socket per accepting thread, because computing the best placement for an incoming file requires querying every chunkserver from the single thread handling that allocation request.
+- *ChunkServer*
+  - `nameserver_conn`: a single calling socket, connected to the nameserver's `server_sock`. Held for the chunkserver's whole runtime.
+  - `client_sock`: a listening socket bound to the chunkserver's own client port, accepting connections for chunk reads and writes.
+
+Beyond these persistent attributes, some sockets exist only on the fly: opened and closed again for a single task, never held as an attribute. This is the case between clients and chunkservers, where a connection is opened and closed on the fly to write and read chunks directly from the source. For a given connection, the chunkserver is always the listener, on its `client_sock`; the caller is usually the client, but during pipelined writes a chunkserver forwarding a chunk to the next replica becomes the caller itself, reconnecting to that next chunkserver's very same `client_sock` listener.
 
 #figure(
   layout(size => {
@@ -117,49 +125,50 @@ The sockets are organized this way:
       node-inset: 8pt,
       edge-stroke: 0.9pt,
 
-      // Nodes
-      node((0, 1.5), [*Client* \ Alice], fill: cl-fill, shape: rect, corner-radius: 3pt, name: <alice>),
-      node((4, 1.5), [*NameServer* \ (metadata)], fill: ns-fill, shape: rect, corner-radius: 3pt, name: <ns>),
-      node((2, 0), [Chunkserver 1], fill: cs-fill, shape: rect, corner-radius: 3pt, name: <cs1>),
+      // Nodes, each labelled with its own socket attributes
+      node((0, 1.5), [*Client* \ Alice \ `conn`], fill: cl-fill, shape: rect, corner-radius: 3pt, name: <alice>),
+      node((4, 1.5), [*NameServer* \ (metadata) \ `client_sock` \ `server_sock` \ `chunk_servers_conns`], fill: ns-fill, shape: rect, corner-radius: 3pt, name: <ns>),
+      node((2, 0), [Chunkserver 1 \ `nameserver_conn` \ `client_sock`], fill: cs-fill, shape: rect, corner-radius: 3pt, name: <cs1>),
       node((2, 1), [Chunkserver 2], fill: cs-fill, shape: rect, corner-radius: 3pt, name: <cs2>),
       node((2, 2), [Chunkserver 3], fill: cs-fill, shape: rect, corner-radius: 3pt, name: <cs3>),
       node((2, 3), [Chunkserver 4], fill: cs-fill, shape: rect, corner-radius: 3pt, name: <cs4>),
 
-      // Alice <-> NameServer (Sockets), bent to route around the chunkserver column
-      edge(<alice>, <ns>, "<->", bend: -50deg,
-        label: [Client: attr. socket \ NameServer: thread listener],
+      // Alice -> NameServer: Alice calls, the NameServer listens on client_sock
+      edge(<alice>, <ns>, "->", bend: -50deg,
+        label: [persistent: caller -> listener],
         label-pos: 0.5, label-side: left, label-fill: true),
 
-      // NameServer <-> Chunkservers (Sockets)
-      edge(<ns>, <cs1>, "<->",
-        label: [NameServer: list attr. \ ChunkServer: attr. socket],
+      // Chunkservers -> NameServer: each chunkserver calls, the NameServer listens on server_sock
+      edge(<cs1>, <ns>, "->",
+        label: [persistent: caller -> listener],
         label-pos: 0.5, label-side: left, label-fill: true),
-      edge(<ns>, <cs2>, "<->"),
-      edge(<ns>, <cs3>, "<->"),
-      edge(<ns>, <cs4>, "<->"),
+      edge(<cs2>, <ns>, "->"),
+      edge(<cs3>, <ns>, "->"),
+      edge(<cs4>, <ns>, "->"),
 
-      // Alice <-> Chunkservers (Sockets)
-      edge(<alice>, <cs1>, "<->"),
-      edge(<alice>, <cs2>, "<->",
-        label: [On-the-fly (R/W) \ Caller $<->$ Listener],
+      // Alice -> Chunkservers: Alice calls, the chunkserver listens on client_sock
+      edge(<alice>, <cs1>, "->", stroke: (dash: "dashed")),
+      edge(<alice>, <cs2>, "->", stroke: (dash: "dashed"),
+        label: [on-the-fly: caller -> listener],
         label-pos: 0.5, label-side: left, label-fill: true),
-      edge(<alice>, <cs3>, "<->"),
-      edge(<alice>, <cs4>, "<->"),
+      edge(<alice>, <cs3>, "->", stroke: (dash: "dashed")),
+      edge(<alice>, <cs4>, "->", stroke: (dash: "dashed")),
 
-      // Chunkserver <-> Chunkserver (pipelined write forwarding, same on-the-fly
-      // socket and the same listening endpoint as Alice <-> Chunkserver above)
-      edge(<cs1>, <cs2>, "<->",
-        label: [Forward (write pipeline) \ Caller $<->$ Listener \ (same endpoint as above)],
+      // Chunkserver -> Chunkserver (pipelined write forwarding): the forwarding
+      // chunkserver calls, reconnecting to the next chunkserver's very same
+      // client-facing client_sock listener used by Alice above.
+      edge(<cs1>, <cs2>, "->", stroke: (dash: "dashed"),
+        label: [on-the-fly forward: caller -> listener \ (same endpoint as above)],
         label-pos: 0.5, label-side: right, label-fill: true),
-      edge(<cs2>, <cs3>, "<->"),
-      edge(<cs3>, <cs4>, "<->"),
+      edge(<cs2>, <cs3>, "->", stroke: (dash: "dashed")),
+      edge(<cs3>, <cs4>, "->", stroke: (dash: "dashed")),
     )
 
     let w = measure(d).width
     let factor = if w > size.width { size.width / w * 100% } else { 100% }
     scale(factor, reflow: true, d)
   }),
-  caption: [Socket connection architecture: which side holds the socket as an attribute, which side keeps a listener thread, and which connections are opened on the fly.],
+  caption: [Socket attributes held by each actor, labelled on its node, and the direction each connection is made in: solid arrows are persistent attribute sockets (caller $->$ listener), dashed arrows are on-the-fly sockets opened and closed for a single read or write.],
 )
 
 #v(1.5em)
@@ -258,7 +267,7 @@ Once a chunk is retrieved, the client trims it to the requested byte range (the 
 
 == Handling exceptions
 
-Exception handling might be the weakest part of the project. It was quite messy: as it was not written in Java, so we can't know at every moment which method could raise an Exception. This was all the more important since we have manipulated unstable objects such as threads and sockets. However, we could notice mainly three scenarios when exception handling can be well managed: 
+Exception handling might be the weakest part of the project. It was quite messy: as it was written in Python, we can't know at every moment which method could raise an Exception. This was all the more important since we have manipulated unstable objects such as threads and sockets. However, we could notice mainly three scenarios when exception handling can be well managed: 
 - For socket instance handling: we have used the structure `with self.socket as sock:`
 - Whenever performing a network request: we wrap it in a `try:... except Exception as ex:... finally:...` to handle sudden disconnections.
 - Whenever we perform a network request that succeded, but the remote request performance failed: this happens when we want to store a file that is too heavy to be stored in the database. A JSON message `{'status':'nok', 'payload':<message>}` is returned to the sender, indicating through the payload that the operation has failed.
