@@ -57,7 +57,8 @@ class Client():
             return
         else:
             for file in files:
-                print(f"{self}: id={file['file_id']} {file['filename']}")
+                full_path = file['directory'].rstrip("/") + "/" + file['filename']
+                print(f"{self}: id={file['file_id']} {full_path}")
             return
 
     def send_message(self, msg):
@@ -75,15 +76,17 @@ class Client():
         except OSError as e:
             print(f"{self} couldn't send message ! : {e}")
 
-    def send_write(self, path):
+    def send_write(self, path, directory="/"):
         """
-        Sends a write request to the name server. request format : msg = <path>
+        Writes the local file <path> into the DFS directory <directory> (which must exist).
+        The stored name is the basename of <path>.
         """
         ## Request allocation to name server
         header = {
             "action": "allocate",
             "clientname": self.name,
-            "chunk_number" : (os.path.getsize(path)//CHUNK_SIZE) + 1,
+            "chunk_number" : max(1, -(-os.path.getsize(path)//CHUNK_SIZE)),   # ceil; an empty file still gets one chunk
+            "directory": directory,
             "filename": os.path.basename(path)
         }
         response = self.conn.request(header)
@@ -120,14 +123,22 @@ class Client():
             print(f"{self}: couldn't write {path} : {ex}")
             return
 
-        print(f"{self}: {path} written successfully as file_id={file_id} ({len(chunks)} chunk(s)).")
+        print(f"{self}: {path} written successfully as file_id={file_id} ({len(chunks)} chunk(s)) in {header['directory']}.")
 
     def send_read(self, file_id=None, filename=None, offset_begin=0, offset_end=0):
+        """
+        Reads a file identified by its file id, or by its DFS path (directory + filename, e.g. "/docs/a.txt").
+        The result is saved flat in the client's local storage directory under the file's own name.
+        """
         req = {'action': 'read', 'clientname': self.name}
         if file_id is not None:
             req['file_id'] = file_id
         else:
-            req['filename'] = filename
+            try:
+                req['directory'], req['filename'] = utils.split_path(filename)
+            except ValueError as e:
+                print(f"{self}: invalid path: {e}")
+                return
         response = self.conn.request(req)
         if response["status"] != "ok":
             print(response["payload"])
@@ -172,7 +183,7 @@ class Client():
 
                     # trim on the fly: start of the first chunk, end of the last one
                     start = offset_begin % CHUNK_SIZE if i == 0 else 0
-                    end = offset_end % CHUNK_SIZE if i == last else len(data)
+                    end = offset_end % CHUNK_SIZE if (i == last and offset_end != -1) else len(data)
                     out_file.write(data[start:end])
                     del data  # free the chunk before fetching the next one
 
@@ -183,6 +194,38 @@ class Client():
 
         print(f"File written to {out_path}")
 
+
+    def _directory_request(self, action, path):
+        try:
+            return self.conn.request({"action": action, "clientname": self.name, "path": path})
+        except Exception as e:
+            print(f"{self}: {action} failed: {e}")
+            return None
+
+    def send_mkdir(self, path):
+        response = self._directory_request("mkdir", path)
+        if response:
+            print(f"{self}: {response['message']}")
+
+    def send_rmdir(self, path):
+        response = self._directory_request("rmdir", path)
+        if response:
+            print(f"{self}: {response['message']}")
+
+    def send_lsdir(self, path="/"):
+        response = self._directory_request("lsdir", path)
+        if not response:
+            return
+        if response["status"] != "ok":
+            print(f"{self}: {response['message']}")
+            return
+        print(f"{self}: content of {response['path']}")
+        for d in response["dirs"]:
+            print(f"  [dir]  {d}/")
+        for f in response["files"]:
+            print(f"  id={f['file_id']} {f['filename']}")
+        if not response["dirs"] and not response["files"]:
+            print("  (empty)")
 
     def send_list(self):
         message = {

@@ -7,6 +7,30 @@ import itertools, queue, threading, time
 
 from mini_dfs.globals import CHUNK_SIZE
 
+def normalize_path(path : str) -> str:
+    """
+    Turns a DFS path into its canonical absolute form ("docs//a/" -> "/docs/a").
+    Raises ValueError if the path is empty or climbs above the root ("..").
+    """
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("empty path")
+    parts = []
+    for part in path.strip().split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            raise ValueError(f"'..' is not allowed in the path '{path}'")
+        parts.append(part)
+    return "/" + "/".join(parts)
+
+def split_path(path : str) -> tuple[str, str]:
+    """Splits a DFS file path into (directory, filename). "/a/b/f.txt" -> ("/a/b", "f.txt"), "f.txt" -> ("/", "f.txt")."""
+    norm = normalize_path(path)
+    directory, _, filename = norm.rpartition("/")
+    if not filename:
+        raise ValueError(f"'{path}' doesn't contain a filename")
+    return (directory or "/"), filename
+
 def argsort(l : list, reverse=False):
     indices = sorted(range(len(l)), key=l.__getitem__, reverse=reverse)
     return indices

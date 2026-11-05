@@ -10,30 +10,51 @@ The project is dependency-free (outside of `pytest` for testing). It handles its
 
 Hyperparameters in `globals.py` can be changed before launching the project, most notably `CHUNK_SIZE` (2 MiB by default) and `N_REPLICAS` (3 by default). Apart from the global hyperparameters, there is no data leak between the different instances of the simulation, making the simulation reproducible with real devices.
 
-From the project root, preferably within a dedicated python virtual environment, here are the essential commands to use the CLI:
+Here are the essential commands to use the CLI:
 ```sh
+# <create a venv and activate it: essential !>
 pip install -e .                            # Installs the project as a module in the current environment using pyproject.toml.
 python -m mini_dfs                          # Start module.
 help                                        # available commands.
 macro                                       # preset architecture (4 chunkservers, 1 nameserver, 1 client).
 ls                                          # list all instances.
-write alice big_demo.bin                    # alice writes an 8MB+ file in the database.
-lsf alice                                   # list all stored files from alice (shows id + filename).
+write alice big_demo.bin                    # alice writes an 8MB+ file in the database (in the root directory /).
+lsf alice                                   # list all stored files from alice (shows id + full path).
 read alice big_demo.bin 0 -1                # read alice's entire file from the database.
 read alice big_demo.bin 2000000 2000064     # read 64 bytes near the 2 MB mark, inside chunk 0.
 read alice big_demo.bin 2097136 2097168     # read 32 bytes straddling the chunk 0 / chunk 1 boundary.
 ```
 
-Running these exact commands against a real 8.58 MB file, `big_demo.bin`, gives:
+Files can also be organized in directories, which are managed per client:
+```sh
+mkdir alice /docs/2026                      # create a directory and its missing parents.
+write alice big_demo.bin /docs/2026         # upload into a nested directory (it must exist).
+lsdir alice /docs                           # list the sub-directories and files of /docs.
+read alice /docs/2026/big_demo.bin 0 -1     # access a file by directory + filename.
+rmdir alice /docs/2026                      # refused while the directory is not empty.
+```
+Reading with a bare filename (as in the first commands above) means the root directory. `lsf` always lists every file of the client, with its full path.
+
+A session running these commands on `big_demo.bin`, with
+the file written into /docs, gives:
 
 #figure(
-  image("../media/terminal1.png", width: 80%)
+    grid(
+      columns: (1fr, 1fr),
+      gutter: 8pt,
+      image("../media/terminal1.png"),
+      image("../media/terminal11.png"),
+    ),
+    caption: "Example: Alice creates a directory named docs and stores big_demo.bin inside it."
 )
 
-A new folder named `storage/` (automatically destroyed when exiting the program) should appear, containing the memory of the whole simulation. After these commands, you should get this:
+#v(1.5em)
+
+A new folder named `storage/` (automatically destroyed when exiting the program) should appear in the project, containing the memory of the whole simulation. After these commands, you should get this:
 
 #figure(
-  image("../media/terminal2.png", width: 30%)
+  image("../media/terminal2.png", width: 30%),
+  caption: "hierarchy of the storage folder (in the project) after executing the commands"
 )
 
 And last, in the `checksum.txt` for `ds1` and `ds4`, you should have this:
@@ -50,7 +71,8 @@ And last, in the `checksum.txt` for `ds1` and `ds4`, you should have this:
     ),
     align(center, image("../media/checksums3.png", width: 50%)),
   ),
-  caption: "checksum.txt of ds1 (left), ds2 (right) and ds3 (bottom): should contain 3 exact same checksum.txt files (each line is: <md5 checksum> <number of bytes>). And 2097152 = 1024 * 1024 * 2 = 2 MB."
+  caption: " checksum.txt of ds1 (left), ds2 (right) and ds3 (bottom), four lines each (<md5 checksum> <number of bytes>). Every chunk has the same MD5 and length on its three chunkservers. 2,097,152 bytes = 2 × 1024 × 1024 = 2 MiB.
+"
 )
 
 #figure(

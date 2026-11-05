@@ -2,6 +2,7 @@ import argparse
 import cmd
 import atexit
 import os
+import shlex
 
 from mini_dfs.client import Client
 from mini_dfs.name_server import NameServer
@@ -119,23 +120,72 @@ class CLI(cmd.Cmd):
 
     def do_write(self, args):
         """
-        Writes the <path-to-file> file into the database.
-        Usage: write <client-name> <path-to-file>
+        Writes the <path-to-file> file into the database, in the DFS directory <dfs-dir>
+        (the root "/" by default). The directory must already exist (see mkdir).
+        Use double quotes around a local path that contains spaces.
+        Usage: write <client-name> <path-to-file> [<dfs-dir>]
         """
         if (len(args.split()) < 2):
-            print("Usage: write <client-name> <path-to-file>")
+            print("Usage: write <client-name> <path-to-file> [<dfs-dir>]")
             return
 
-        actor_name, path = args.split(" ",1)
+        actor_name, rest = args.split(" ",1)
+        rest = rest.strip()
+        if os.path.isfile(rest):                    # the whole remainder is a local file (e.g. a path with spaces)
+            path, directory = rest, "/"
+        else:
+            tokens = [t.strip('"') for t in shlex.split(rest, posix=False)]
+            if len(tokens) > 2:
+                print("Usage: write <client-name> <path-to-file> [<dfs-dir>]")
+                return
+            path, directory = tokens[0], (tokens[1] if len(tokens) == 2 else "/")
+        if not os.path.isfile(path):
+            print(f"file {path} doesn't exist !")
+            return
         for actor in self.clients:
             if actor.name == actor_name:
-                actor.send_write(path)
-                break
+                actor.send_write(path, directory)
+                return
+        print(f"client name {actor_name} doesn't exist !")
+
+    def _directory_command(self, args, usage, method, optional_path=False):
+        parts = args.split()
+        if len(parts) not in ((1, 2) if optional_path else (2,)):
+            print(usage)
+            return
+        actor_name, path = parts[0], (parts[1] if len(parts) == 2 else "/")
+        for actor in self.clients:
+            if actor.name == actor_name:
+                getattr(actor, method)(path)
+                return
+        print(f"client name {actor_name} doesn't exist !")
+
+    def do_mkdir(self, args):
+        """
+        Creates the DFS directory <dfs-dir>, with its missing parent directories.
+        Usage: mkdir <client-name> <dfs-dir>
+        """
+        self._directory_command(args, "Usage: mkdir <client-name> <dfs-dir>", "send_mkdir")
+
+    def do_rmdir(self, args):
+        """
+        Removes an empty DFS directory.
+        Usage: rmdir <client-name> <dfs-dir>
+        """
+        self._directory_command(args, "Usage: rmdir <client-name> <dfs-dir>", "send_rmdir")
+
+    def do_lsdir(self, args):
+        """
+        Lists the sub-directories and the files of a DFS directory (the root "/" by default).
+        Usage: lsdir <client-name> [<dfs-dir>]
+        """
+        self._directory_command(args, "Usage: lsdir <client-name> [<dfs-dir>]", "send_lsdir", optional_path=True)
 
     def do_read(self, args):
         """
-        Prints an existing file into the terminal, identified either by its filename
-        (resolved to the most recently written file with that name) or by its file id
+        Prints an existing file into the terminal, identified either by its DFS path
+        (directory + filename such as /docs/a.txt; a bare filename means the root directory;
+        resolved to the most recently written file with that name in that directory) or by its file id
         (printed as a receipt when it was written; the only way to reach an older file
         that shares its name with a more recent one).
         Usage: read <client-name> <filename-or-file-id> <offset-begin> <offset-end>
@@ -153,7 +203,7 @@ class CLI(cmd.Cmd):
         try:
             file_id, filename = int(target), None
         except ValueError:
-            file_id, filename = None, os.path.basename(target)
+            file_id, filename = None, target       # a DFS path: directory + filename
         for actor in self.clients:
             if actor.name == actor_name:
                 actor.send_read(file_id, filename, int(offset_begin), int(offset_end))

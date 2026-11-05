@@ -14,8 +14,9 @@ class NameServer():
         self.server_port = server_port
         self.client_sock = None
         self.server_sock = None
-        self.files = dict()                                 # file_id -> {clientname, filename, chunk_handles}
-        self.files_lock:threading.Lock=threading.Lock()
+        self.files = dict()                                 # file_id -> {clientname, directory, filename, chunk_handles}
+        self.dirs = dict()                                  # clientname -> set of existing directories (always contains "/")
+        self.files_lock:threading.Lock=threading.Lock()     # protects both self.files and self.dirs
         self._next_file_id = itertools.count(1)
         self.chunk_servers_conns = []
         self.chunk_servers_conns_lock:threading.Lock=threading.Lock()
@@ -98,6 +99,12 @@ class NameServer():
                 self.process_list_request(req, conn)
             case "read":
                 self.process_read_request(req, conn)
+            case "mkdir":
+                self.process_mkdir_request(req, conn)
+            case "rmdir":
+                self.process_rmdir_request(req, conn)
+            case "lsdir":
+                self.process_lsdir_request(req, conn)
             case _:
                 print(f"{self} has received an unknown request: {req}")
 
@@ -111,12 +118,73 @@ class NameServer():
     def process_message_request(self, req, client_conn: utils.QueueConn):
         print(f"{self} Received from {req["clientname"]}: {req["payload"]}")
 
+    def _client_dirs(self, client_name):
+        """Directory set of a client (created on first use). Must be called with files_lock held."""
+        return self.dirs.setdefault(client_name, {"/"})
+
     def process_list_request(self, req, client_conn: utils.QueueConn):
         client_name = req["clientname"]
         with self.files_lock:
-            entries = [{"file_id": fid, "filename": rec["filename"]}
+            entries = [{"file_id": fid, "directory": rec["directory"], "filename": rec["filename"]}
                        for fid, rec in self.files.items() if rec["clientname"] == client_name]
         client_conn.reply(req, {"action":"list", "files":entries})
+
+    def process_mkdir_request(self, req, conn: utils.QueueConn):
+        """Creates a directory and all its missing parents (like mkdir -p). Succeeds if it already exists."""
+        try:
+            path = utils.normalize_path(req["path"])
+        except ValueError as e:
+            conn.reply(req, {"status":"nok", "message":f"invalid path: {e}"})
+            return
+        with self.files_lock:
+            dirs = self._client_dirs(req["clientname"])
+            parts = path.split("/")[1:] if path != "/" else []
+            for i in range(1, len(parts) + 1):
+                dirs.add("/" + "/".join(parts[:i]))
+        conn.reply(req, {"status":"ok", "message":f"directory {path} is ready."})
+
+    def process_rmdir_request(self, req, conn: utils.QueueConn):
+        """Removes an empty directory (no file, no sub-directory). The root can't be removed."""
+        client_name = req["clientname"]
+        try:
+            path = utils.normalize_path(req["path"])
+        except ValueError as e:
+            conn.reply(req, {"status":"nok", "message":f"invalid path: {e}"})
+            return
+        with self.files_lock:
+            dirs = self._client_dirs(client_name)
+            if path == "/":
+                msg = "the root directory can't be removed."
+            elif path not in dirs:
+                msg = f"directory {path} doesn't exist."
+            elif any(d.startswith(path + "/") for d in dirs) or \
+                 any(r["clientname"] == client_name and r["directory"] == path for r in self.files.values()):
+                msg = f"directory {path} is not empty."
+            else:
+                dirs.discard(path)
+                conn.reply(req, {"status":"ok", "message":f"directory {path} removed."})
+                return
+        conn.reply(req, {"status":"nok", "message":msg})
+
+    def process_lsdir_request(self, req, conn: utils.QueueConn):
+        """Lists the content of ONE directory: its direct sub-directories and its files."""
+        client_name = req["clientname"]
+        try:
+            path = utils.normalize_path(req.get("path", "/"))
+        except ValueError as e:
+            conn.reply(req, {"status":"nok", "message":f"invalid path: {e}"})
+            return
+        with self.files_lock:
+            dirs = self._client_dirs(client_name)
+            if path not in dirs:
+                conn.reply(req, {"status":"nok", "message":f"directory {path} doesn't exist."})
+                return
+            prefix = "/" if path == "/" else path + "/"
+            subdirs = sorted(d[len(prefix):] for d in dirs
+                             if d != path and d.startswith(prefix) and "/" not in d[len(prefix):])
+            files = [{"file_id": fid, "filename": r["filename"]}
+                     for fid, r in self.files.items() if r["clientname"] == client_name and r["directory"] == path]
+        conn.reply(req, {"status":"ok", "path":path, "dirs":subdirs, "files":files})
 
     def process_read_request(self, req, conn: utils.QueueConn):
         clientname, file_id = req['clientname'], req.get('file_id')
@@ -128,10 +196,15 @@ class NameServer():
                 return
         else:
             filename = req['filename']
+            try:
+                directory = utils.normalize_path(req.get('directory', "/"))
+            except ValueError as e:
+                conn.reply(req, {"status":"nok", "payload":f"invalid path: {e}"})
+                return
             match = None
             with self.files_lock:
                 for rec in self.files.values():     # dicts preserve insertion order: last match is the most recent write
-                    if rec["clientname"] == clientname and rec["filename"] == filename:
+                    if rec["clientname"] == clientname and rec["directory"] == directory and rec["filename"] == filename:
                         match = rec
             if match is None:
                 conn.reply(req, {"status":"nok", "payload":"no such filename found in the database !"})
@@ -141,6 +214,18 @@ class NameServer():
     def process_allocate_request(self, req, client_conn: utils.QueueConn):
         client_name, chunk_number, filename = req["clientname"], req["chunk_number"], req["filename"]
         print(f"{self} received an allocation request of {chunk_number} chunks")
+
+        # the target directory must exist (checked first, so nothing is allocated on error)
+        try:
+            directory = utils.normalize_path(req.get("directory", "/"))
+        except ValueError as e:
+            client_conn.reply(req, {"status": "nok", "message": f"invalid directory: {e}"})
+            return
+        with self.files_lock:
+            directory_exists = directory in self._client_dirs(client_name)
+        if not directory_exists:
+            client_conn.reply(req, {"status": "nok", "message": f"directory {directory} doesn't exist: create it with mkdir first!"})
+            return
 
         # find the best chunk configuration according to the servers storage
         with self.chunk_servers_conns_lock:
@@ -182,7 +267,10 @@ class NameServer():
             return
 
         with self.files_lock:
+            if directory not in self._client_dirs(client_name):     # removed by a concurrent rmdir
+                client_conn.reply(req, {"status": "nok", "message": f"directory {directory} doesn't exist anymore!"})
+                return
             file_id = next(self._next_file_id)
-            self.files[file_id] = {"clientname": client_name, "filename": filename, "chunk_handles": chunks}
+            self.files[file_id] = {"clientname": client_name, "directory": directory, "filename": filename, "chunk_handles": chunks}
 
         client_conn.reply(req, {"status": "ok", "file_id": file_id, "chunks": chunks})

@@ -13,18 +13,25 @@ The project is managed through the module manager **uv**. The project is **depen
 
 Hyperparameters in ``globals.py`` can be changed before launching the project.
 
-## ``cli.py``
+## ``__main__.py``
 
 The cli was build using the built-in ``cmd`` module from python.
 
-From the project root, preferably within a python virtual environment, here are the essential commands to use the CLI:
+Here are the essential commands to use the CLI:
 ``` cmd
+<create a venv and activate it>
+pip install -e .
 python -m mini_dfs
 help
 macro
 ls
 write alice project_ict_3.pdf
 lsf alice
+mkdir alice /docs/2026
+write alice project_ict_3.pdf /docs/2026
+lsdir alice /docs
+read alice /docs/2026/project_ict_3.pdf 0 -1
+rmdir alice /docs/2026
 read alice project_ict_3.pdf 0 -1
 read alice project_ict_3.pdf 1 11
 ```

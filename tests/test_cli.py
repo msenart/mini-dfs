@@ -190,3 +190,96 @@ def test_read_file_for_client_with_no_writes_is_a_noop(running_cli, capsys):
     capsys.readouterr()
     running_cli.onecmd("read alice never_written.txt 0 -1")
     assert "no such filename" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- directories
+
+def out_of(cli, capsys, command):
+    capsys.readouterr()
+    cli.onecmd(command)
+    return capsys.readouterr().out
+
+
+def test_mkdir_creates_parents_and_is_idempotent(running_cli, capsys):
+    running_cli.onecmd("mkdir alice /a/b/c")
+    running_cli.onecmd("mkdir alice /a/b/c")
+    assert "[dir]  b/" in out_of(running_cli, capsys, "lsdir alice /a")
+    assert "[dir]  c/" in out_of(running_cli, capsys, "lsdir alice /a/b")
+    assert "[dir]  a/" in out_of(running_cli, capsys, "lsdir alice")
+
+
+def test_invalid_paths_are_rejected(running_cli, capsys):
+    assert "invalid path" in out_of(running_cli, capsys, "mkdir alice /a/../..")
+    assert "doesn't exist" in out_of(running_cli, capsys, "lsdir alice /nope")
+
+
+def test_write_into_nested_directory_and_read_by_path(running_cli, tmp_path, capsys):
+    content = bytes(range(200))
+    running_cli.onecmd("mkdir alice /docs/2026")
+    out = out_of(running_cli, capsys, f"write alice {write_file(tmp_path, content)} /docs/2026")
+    assert "written successfully" in out and "/docs/2026" in out
+    assert "id=" in out_of(running_cli, capsys, "lsdir alice /docs/2026")
+    assert "/docs/2026/data.txt" in out_of(running_cli, capsys, "lsf alice")
+
+    running_cli.onecmd("read alice /docs/2026/data.txt 0 -1")
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == content
+
+
+def test_same_filename_in_two_directories_does_not_collide(running_cli, tmp_path):
+    running_cli.onecmd("mkdir alice /x")
+    running_cli.onecmd("mkdir alice /y")
+    running_cli.onecmd(f"write alice {write_file(tmp_path, b'in x')} /x")
+    running_cli.onecmd(f"write alice {write_file(tmp_path, b'in y')} /y")
+    running_cli.onecmd(f"write alice {write_file(tmp_path, b'in root')}")
+
+    for path, expected in (("/x/data.txt", b"in x"), ("/y/data.txt", b"in y"), ("data.txt", b"in root")):
+        running_cli.onecmd(f"read alice {path} 0 -1")
+        assert (Path("storage") / "alice" / "data.txt").read_bytes() == expected
+
+
+def test_same_name_twice_in_one_directory_latest_wins_older_by_id(running_cli, tmp_path, capsys):
+    running_cli.onecmd("mkdir alice /d")
+    out_of(running_cli, capsys, f"write alice {write_file(tmp_path, b'old')} /d")
+    out = out_of(running_cli, capsys, f"write alice {write_file(tmp_path, b'new')} /d")
+    running_cli.onecmd("read alice /d/data.txt 0 -1")
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == b"new"
+    running_cli.onecmd("read alice 1 0 -1")
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == b"old"
+
+
+def test_write_into_missing_directory_fails_and_stores_nothing(running_cli, tmp_path, capsys):
+    out = out_of(running_cli, capsys, f"write alice {write_file(tmp_path, b'x')} /missing")
+    assert "doesn't exist" in out
+    assert "no file stored" in out_of(running_cli, capsys, "lsf alice")
+    assert all(not files for files in bin_files(running_cli).values())
+
+
+def test_read_with_wrong_directory_fails(running_cli, tmp_path, capsys):
+    running_cli.onecmd("mkdir alice /x")
+    running_cli.onecmd(f"write alice {write_file(tmp_path, b'x')} /x")
+    assert "no such filename" in out_of(running_cli, capsys, "read alice /data.txt 0 -1")
+
+
+def test_rmdir_rules(running_cli, tmp_path, capsys):
+    running_cli.onecmd("mkdir alice /a/b")
+    assert "not empty" in out_of(running_cli, capsys, "rmdir alice /a")           # has a sub-directory
+    running_cli.onecmd(f"write alice {write_file(tmp_path, b'x')} /a/b")
+    assert "not empty" in out_of(running_cli, capsys, "rmdir alice /a/b")         # has a file
+    assert "root" in out_of(running_cli, capsys, "rmdir alice /")
+    assert "doesn't exist" in out_of(running_cli, capsys, "rmdir alice /zzz")
+    running_cli.onecmd("mkdir alice /empty")
+    assert "removed" in out_of(running_cli, capsys, "rmdir alice /empty")
+    assert "doesn't exist" in out_of(running_cli, capsys, "lsdir alice /empty")
+
+
+def test_directories_are_private_to_each_client(cli, capsys):
+    make_cli(cli, clients=("alice", "bob"))
+    cli.onecmd("mkdir alice /secret")
+    assert "doesn't exist" in out_of(cli, capsys, "lsdir bob /secret")
+
+
+def test_read_to_end_keeps_last_byte_on_chunk_multiple(running_cli, tmp_path):
+    content = bytes(i % 251 for i in range(CHUNK_SIZE))
+    running_cli.onecmd(f"write alice {write_file(tmp_path, content)}")
+    running_cli.onecmd("read alice data.txt 0 -1")
+    assert (Path("storage") / "alice" / "data.txt").read_bytes() == content

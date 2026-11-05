@@ -23,7 +23,7 @@
       node((6, 2), [Chunkserver 4], fill: cs-fill, shape: rect, corner-radius: 3pt, name: <cs4>),
 
       // Plan de contrôle : Alice <-> NameServer (deux flèches séparées)
-      edge(<alice>, <ns>, "->", bend: 20deg, label: [1. file name], label-side: left, label-fill: true),
+      edge(<alice>, <ns>, "->", bend: 20deg, label: [1. file name + directory], label-side: left, label-fill: true),
       edge(<ns>, <alice>, "->", bend: 20deg, label: [2. chunk handles \ + locations], label-side: left, label-fill: true),
 
       // NameServer <-> chunkservers (pointillés, une seule étiquette)
@@ -111,7 +111,7 @@ When the chunkserver receives the request, it sends back to the nameserver:
 
 To send a raw byte chunk, the sender (client or chunkserver) first sends a JSON header, then the raw bytes:
 ```python
-{'action':'write', 'chunk_index':chunk_index} # header
+{'action':'write', 'file_index':file_index}   # header
 
 'E8In&56"&"rbiZIUZ_...'                       # raw bytes
 ```
@@ -200,11 +200,12 @@ for chunk in chunks:
     for server in chosen:
         chunks_held[server] += 1                      # tracked for the next chunk's pick, not yet real
 ```
-Right after that, the nameserver asks the chunkservers to allocate the chunks (within a directory lock named `dir_lock`, creating chunk files without actually writing anything inside yet), and once it succeeds, it generates a unique, incrementing file ID and stores the client's name, the filename, and the precise chunk locations under that ID:
+Right after that, the nameserver asks the chunkservers to allocate the chunks (within a lock on its storage folder named `dir_lock`, creating chunk files without actually writing anything inside yet), and once it succeeds, it generates a unique, incrementing file ID and stores the client's name, the directory, the filename, and the precise chunk locations under that ID:
 ```python
 {
   1:{
     'clientname':'alice',
+    'directory':'/docs/2026',
     'filename':'filename',
     'chunk_handles':[
       {'host':CHUNKSERVER_HOST, 'port':CHUNKSERVER_PORT, file_index: 0},
@@ -213,7 +214,7 @@ Right after that, the nameserver asks the chunkservers to allocate the chunks (w
   }
 }
 ```
-The file ID is the real identity of a stored file: a client may write two different files under the same name, each getting its own fresh ID and both being kept. It is sent back to the client as part of the JSON reply, and the client prints it as a receipt. `read` can take a plain filename, or directly the file id. For duplicate filenames, the nameserver resolves it internally to the most recently written file with that name for that client (older copies remain reachable only by the ID printed at write time).
+The file ID is the real identity of a stored file: a client may write two different files under the same name, each getting its own fresh ID and both being kept. It is sent back to the client as part of the JSON reply, and the client prints it as a receipt. `read` can take a path (directory and filename), or directly the file id. For duplicate names in the same directory, the nameserver resolves the path to the most recently written file with that name for that client (older copies remain reachable only by the ID printed at write time).
 
 The client then writes each chunk through pipelined replication: rather than sending the chunk's bytes to every replica itself (was the first implementation), the client sends them once, to the first chunkserver in that chunk's replica list, together with the list of the remaining replicas as an extra `forward_to` field in the write header:
 ```python
@@ -277,6 +278,19 @@ A chunkserver that fails either check replies `nok` instead of the bytes, which 
 
 Once a chunk is retrieved, the client trims it to the requested byte range (the full chunk in the middle of the range, only the tail of the first chunk and the head of the last one at the edges), appends it to the output file, frees it, and moves on to the next chunk, until every needed chunk has been fetched and the requested range is fully reassembled on disk.
 
+== Directory Hierarchy (Bonus)
+
+This section describes the optional directory-management extension of the project brief (bonus). The other optional extension, recovery after the loss of a chunkserver, was not implemented.
+
+Files are organized in a hierarchy of directories, separate for each client name (alice's `/docs` and bob's `/docs` are unrelated). Since clients are not authenticated (see Limitations and Conclusion), this separation is organizational, not a security boundary. The hierarchy is pure metadata and lives only in the nameserver: a set of directory paths per client, which always contains the root `/`, and the `directory` field of every file record shown above. The nesting is encoded in the path itself (`/docs/2026` is a child of `/docs`), so no tree structure is needed. Chunkservers know nothing about directories, and the chunkserver protocol is unchanged: a chunk is still just a numbered file.
+
+Paths are normalized by the nameserver and the client before use (repeated or trailing slashes are removed, and `..` is refused, so a path cannot leave the root). Three new requests, all answered by the nameserver alone, manage the hierarchy:
+- `mkdir` creates a directory and any missing parent (like `mkdir -p`). Creating a directory that already exists is not an error.
+- `rmdir` removes a directory only if it holds no file and no sub-directory. The root cannot be removed.
+- `lsdir` lists the direct sub-directories and the files of one directory.
+
+The `allocate` and `read` requests now carry a `directory` field. A write goes into a directory that must already exist: the nameserver checks this before allocating any chunk, so a failed write leaves nothing behind. A read by path is split into a directory and a filename, and matches only files stored in that exact directory, so `/x/data.txt` and `/y/data.txt` are two different files. A read by file ID does not need a path. Like the rest of the metadata, the directories are kept in memory only and are lost when the nameserver stops. On the client side, a file that is read is still saved flat in the client's local `storage/<name>` folder, under its own filename.
+
 == Handling exceptions
 
 Exception handling might be the weakest part of the project. Python does not declare which exceptions a function may raise, and threads and sockets can fail at almost any call, so we concentrated on the three failure points below. This was all the more important since we have manipulated unstable objects such as threads and sockets.
@@ -285,12 +299,3 @@ We could notice mainly three scenarios when exception handling can be well manag
 - For socket instance handling: we have used the structure `with self.socket as sock:`
 - Whenever performing a network request: we wrap it in a `try:... except Exception as ex:... finally:...` to handle sudden disconnections.
 - Whenever we perform a network request that succeded, but the remote request performance failed: this happens when we want to store a file that is too heavy to be stored in the database. A JSON message `{'status':'nok', 'payload':<message>}` is returned to the sender, indicating through the payload that the operation has failed.
-
-== Limitations of the Implementation <sec-limitations>
-
-This model is scoped to fit a course project rather than production use. The nameserver only ever organizes traffic: it never reads or writes file bytes itself, which keeps it lightweight and mirrors GFS's core separation of metadata from data. Replication also mirrors GFS: it is chunkserver-pipelined rather than client-driven, so that the client's connection is not overloaded. Finally, the preallocation with the lock before actually writing the chunks made the writing process more secure.
-
-There are still limitations to our implementation:
-- No heartbeat: there is no periodic liveness check between the nameserver and the chunkservers, so a dead chunkserver is only discovered the next time a request happens to target it, and nothing automatically restores the replicas it was holding.
-- Little verification between actors: beyond the chunk checksum, there is no authentication protocol, nothing stops a client from acting under another client's name, and chunkservers trust whatever the nameserver tells them.
-- Metadata lives only in memory on the nameserver: this is discussed further in the Scalability section.

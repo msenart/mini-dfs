@@ -1,19 +1,20 @@
 // ---------- 5. Limitations and conclusion ----------
 = Limitations and Conclusion
 
-== Scalability
+== Scalability and Limitations
 
-The chunk layer scales the way GFS's does: storage capacity and write bandwidth grow by adding chunkservers, and the nameserver never touches file bytes, so it never becomes a data-path bottleneck. Three aspects limit how far this implementation specifically scales, though:
+This model is scoped to fit a course project rather than production use. One design choice does make writes safer: the chunks are preallocated, under a lock, before any byte is written, so a write that cannot be allocated fails cleanly and stores nothing.
 
-- Metadata is not persisted: the nameserver keeps its entire file-ID-to-chunk lookup table (`self.files`) as a plain in-memory `dict`. If the nameserver process dies, every chunk byte on every chunkserver becomes unreachable, even though the data itself is untouched, since there is no operation log or checkpoint to replay, unlike GFS's master.
+The chunk layer scales the way GFS's does: storage capacity and write bandwidth grow by adding chunkservers, and the nameserver never touches file bytes, so it never becomes a data-path bottleneck. Three aspects limit how far this implementation specifically scales, though, and a fourth limitation concerns trust:
+
+- Metadata is not persisted: the nameserver keeps its entire file-ID-to-chunk lookup table (`self.files`) as a plain in-memory `dict` (the per-client set of directories is kept in memory too). If the nameserver process dies, every chunk byte on every chunkserver becomes unreachable, even though the data itself is untouched, since there is no operation log or checkpoint to replay, unlike GFS's master.
 - No failure detection: there is no heartbeat between the nameserver and the chunkservers; a chunkserver that silently dies is only noticed on the next request that happens to target it, and nothing re-replicates the copies it was holding.
 - The metadata path is serial: getall_storage queries the N chunkservers one after another, so its cost grows linearly with N. We have not measured how much this costs in practice.
+- Little verification between actors: beyond the chunk checksum, nothing authenticates the actors and they trust each other completely; this is detailed in the security paragraph below.
 
 
-None of these limitations is minor for a production system — persistence and failure
-recovery are among the parts GFS spends the most effort on — but each one sits in a
-known part of our code, so the extensions below are well scoped:
-- persistence would extend `NameServer.files`'s read/write path with a simple append-only log or periodic snapshot to disk;
+None of these limitations is minor for a production system — persistence and failure recovery are among the parts GFS spends the most effort on — but the first three each sit in a known part of our code, so the extensions below are well scoped:
+- persistence would extend `NameServer.files`'s (and the directory set's) read/write path with a simple append-only log or periodic snapshot to disk;
 - heartbeats could reuse the existing `message` request/response shape on a timer, from each chunkserver to the nameserver;
 - re-replication would extend `process_allocate_request` to notice a chunkserver drop out and pick a replacement;
 - parallelizing `getall_storage` only requires replacing its sequential `for` loop with one request per chunkserver connection fired concurrently, then gathered.
@@ -24,7 +25,7 @@ mini-dfs set out to reproduce, at a small scale, the core idea behind the Google
 
 Building it surfaced three problems that make distributed storage hard even at this scale:
 - Making sure a reply reaches the thread that is actually waiting for it, when several requests share one socket connection — solved here with `QueueConn`'s request-id based dispatch, detailed in the Architecture section.
-- Keeping the coordinator off the data path without starving it of the information it needs to place data well — solved here, imperfectly: see Scalability, with a synchronous storage poll that does not yet scale past a handful of chunkservers.
+- Keeping the coordinator off the data path without starving it of the information it needs to place data well — solved here, imperfectly: see Scalability and Limitations, with a synchronous storage poll that does not yet scale past a handful of chunkservers.
 - Moving replication bandwidth off the client without being able to show the improvement on a single-machine benchmark — solved in the code, and deliberately reported as not shown by the wall-clock numbers in the Performance section, a reminder that a benchmark can be honest about its own blind spots instead of overclaiming.
 
 The simplifications still accepted (no metadata persistence, no heartbeats, a replication chain that forwards a whole chunk at a time rather than streaming it) are among the pieces GFS spends the most engineering effort on.
