@@ -6,14 +6,13 @@ This school project's purpose is to simulate a mini distributed file system (min
 - a master (named `NameServer` in the code), which deals with all the metadata and organizes the traffic.
 - `Client`, which are the database users.
 
-The project is managed through the module manager `uv`. The project is dependency-free (outside of `pytest` for testing). It handles its connections with TCP protocols only and the built-in `socket` module.
+The project is dependency-free (outside of `pytest` for testing). It handles its connections with TCP protocols only and the built-in `socket` module. The CLI was built using the built-in `cmd` module from Python.
 
 Hyperparameters in `globals.py` can be changed before launching the project, most notably `CHUNK_SIZE` (2 MiB by default) and `N_REPLICAS` (3 by default). Apart from the global hyperparameters, there is no data leak between the different instances of the simulation, making the simulation reproducible with real devices.
 
-The CLI was built using the built-in `cmd` module from Python.
-
-Essential commands to use the CLI:
+From the project root, preferably within a dedicated python virtual environment, here are the essential commands to use the CLI:
 ```sh
+pip install -e .                            # Installs the project as a module in the current environment using pyproject.toml.
 python -m mini_dfs                          # Start module.
 help                                        # available commands.
 macro                                       # preset architecture (4 chunkservers, 1 nameserver, 1 client).
@@ -25,7 +24,7 @@ read alice big_demo.bin 2000000 2000064     # read 64 bytes near the 2 MB mark, 
 read alice big_demo.bin 2097136 2097168     # read 32 bytes straddling the chunk 0 / chunk 1 boundary.
 ```
 
-Running these exact commands against a real 8.58 MB file, `big_demo.bin` (the demo PDF `project_ict_3.pdf` concatenated with itself four times end-to-end, so the content is genuine file bytes rather than synthetic filler, and large enough to split into 5 chunks of `CHUNK_SIZE` (2 MiB) each, the last one partial), gives:
+Running these exact commands against a real 8.58 MB file, `big_demo.bin`, gives:
 
 #figure(
   image("../media/terminal1.png", width: 80%)
@@ -40,9 +39,20 @@ A new folder named `storage/` (automatically destroyed when exiting the program)
 And last, in the `checksum.txt` for `ds1` and `ds4`, you should have this:
 
 #figure(
-  image("../media/terminal3.png", width: 50%),
-  caption: "checksum.txt of ds1: should contain 4 checksums (each line is: <md5 checksum> <number of bytes>). And 2097152 = 1024 * 1024 * 2 = 2 MB."
+  stack(
+    dir: ttb,
+    spacing: 8pt,
+    grid(
+      columns: (1fr, 1fr),
+      gutter: 8pt,
+      image("../media/terminal3.png"),
+      image("../media/checksums2.png"),
+    ),
+    align(center, image("../media/checksums3.png", width: 50%)),
+  ),
+  caption: "checksum.txt of ds1 (left), ds2 (right) and ds3 (bottom): should contain 3 exact same checksum.txt files (each line is: <md5 checksum> <number of bytes>). And 2097152 = 1024 * 1024 * 2 = 2 MB."
 )
+
 #figure(
   image("../media/terminal4.png", width: 50%),
   caption: "checksum.txt of ds4: should contain 3 checksums, and the first checksum is the second checksum of ds1."

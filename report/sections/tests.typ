@@ -17,7 +17,7 @@ To get a concrete sense of the overhead introduced by the JSON control-plane tra
     align: (center, left, center, center, center),
     stroke: 0.5pt + luma(150),
     inset: 6pt,
-    table.header([*Chunkservers*], [*Payload*], [*Write (s)*], [*Read (s)*], [*Write throughput (MB/s)*]),
+    table.header([*Chunkservers*], [*Payload*], [*Write (s)*], [*Read (s)*], [*Client write throughput (MB/s)*]),
     [1], [2 MiB (1 chunk)],   [0.023], [0.032], [86.3],
     [1], [10 MiB (5 chunks)], [0.108], [0.202], [92.7],
     [1], [40 MiB (20 chunks)], [0.538], [0.719], [74.3],
@@ -29,12 +29,11 @@ To get a concrete sense of the overhead introduced by the JSON control-plane tra
 )
 
 === Writing
-With 4 chunkservers (where `N_REPLICAS = 3`), the write throughput is at least 2 times lower when `N_REPLICAS  = 3`, and performance decreases even more when there are more than 1 chunk to send. The reason is simple once the mechanism is spelled out: the write request is ensured by the chunkservers to be well performed on each chunkserver. During the chunkserver writing phase, the chunkserver sends the `forward_to` dictionary, and waits the next chunkserver for acknowledgment that the its writing operation is well performed. The client also waits for an acknowledgment from the chunkservers. When `N_REPLICAS = 3`, this means that 3 acknowledgments were sent, 2 for the chunkservers, one for the client. So we don't gain much write time, and the naive solution, which consists of making the client send the replicas three times to each chunkserver, would have performed similarly.
+Compared with a single chunkserver, which can only hold one copy of each chunk, writing to 4 chunkservers with three replicas is 2.2 to 3 times slower. The reason is simple once the mechanism is spelled out: not only the chunk has to be copied three times, but also the replication pipeline makes chunkservers wait for its peer's acknowledgment, and the peer acknowledgment would depend on its own peer, etc... The acknowledgments are recursive. When `N_REPLICAS = 3`, this means that 3 acknowledgments were sent, 2 for the chunkservers, one for the client. So we don't gain much write time, and the naive solution, which consists of making the client send the replicas three times to each chunkserver, would have performed similarly.
 
 What does change, deterministically, is how many bytes the client itself has to send, which is the actual point of pipelining in GFS, since a client's own bandwidth is usually the most lacking resource, not the datacenter-internal links between chunkservers. In our configuration, we only send the chunks once, whereas the naive method would make the client send the chunks three times.
 
-Separately, adding chunkservers (`N_REPLICAS` being constant) still makes writes slower rather than faster for the same payload, which traces back to `NameServer.getall_storage` (Architecture section) querying each chunkserver's remaining storage in a sequential `for` loop instead of concurrently. This is unrelated to replication, and still listed as future work in the Conclusion.
-
 === Reading
 
-Read time scales with the chunk count, same as write: one round trip per chunk. Unlike write, read is not seriously slowed down by adding chunkservers, since a read is always a single direct hop to whichever replica answers first, with no forwarding chain — reading the 40 MiB file is actually marginally faster with 4 chunkservers than with 1 ($0.719"s" -> 0.658"s"$), while writing it is $2.5$ times slower (Writing, above). The remaining gap at the 1-chunkserver baseline (`0.719s` read vs `0.538s` write) comes from `process_read_request` (`chunk_server.py`) doing more work per chunk than a write does: it lists the whole storage directory to confirm the chunk exists, then re-derives and checks its length and MD5 against `checksum.txt` before replying, where a write just opens the target file and writes to it.
+Unlike writes, reads go through no forwarding chain: each chunk is fetched from the first replica in the nameserver's list that returns a valid copy. With 10 MiB and 40 MiB, reads take about as long with 4 chunkservers as with 1 (0.202 s → 0.193 s and 0.719 s → 0.658 s), while writing 40 MiB is 2.5 times slower; only the 2 MiB read is slower (0.032 s → 0.066 s), which a single run cannot distinguish from noise. With one chunkserver, reads are slower than writes (0.719 s against 0.538 s for 40 MiB). A likely cause is the extra work in process_read_request (chunk_server.py): it lists the storage directory and reads checksum.txt before checking the chunk's length and MD5, whereas a write computes the MD5 once and records it. We have not profiled this.
+

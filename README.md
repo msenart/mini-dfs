@@ -17,7 +17,7 @@ Hyperparameters in ``globals.py`` can be changed before launching the project.
 
 The cli was build using the built-in ``cmd`` module from python.
 
-Essential commands to use the CLI:
+From the project root, preferably within a python virtual environment, here are the essential commands to use the CLI:
 ``` cmd
 python -m mini_dfs
 help

@@ -213,7 +213,7 @@ Right after that, the nameserver asks the chunkservers to allocate the chunks (w
   }
 }
 ```
-The file ID is the real identity of a stored file: a client may write two different files under the same name, each getting its own fresh ID and both being kept. It is sent back to the client as part of the JSON reply, and the client prints it as a receipt. `read` and `lsf` still take a plain filename for convenience, though. The nameserver resolves it internally to the most recently written file with that name for that client (older copies remain reachable only by the ID printed at write time).
+The file ID is the real identity of a stored file: a client may write two different files under the same name, each getting its own fresh ID and both being kept. It is sent back to the client as part of the JSON reply, and the client prints it as a receipt. `read` can take a plain filename, or directly the file id. For duplicate filenames, the nameserver resolves it internally to the most recently written file with that name for that client (older copies remain reachable only by the ID printed at write time).
 
 The client then writes each chunk through pipelined replication: rather than sending the chunk's bytes to every replica itself (was the first implementation), the client sends them once, to the first chunkserver in that chunk's replica list, together with the list of the remaining replicas as an extra `forward_to` field in the write header:
 ```python
@@ -235,7 +235,7 @@ chunkserver_storage
 ```
 (chunk files are numbered from `0`, the way `process_allocate_request`'s `file_index` assigns them; the real `storage/ds1/` listing shown in the Demonstration section above confirms this: `0.bin, 1.bin, 2.bin, 3.bin`.)
 === Reading
-When the client asks to read a specific file or specific byte range, the nameserver sends back the whole file's metadata (the ordered list of chunks, each carrying up to `N_REPLICAS` chunkserver locations), and the client works out which of those chunks actually overlap the requested range.
+When the client asks to read a specific file or specific byte range, the nameserver sends back the whole file's metadata (the ordered list of chunks, each carrying up to `N_REPLICAS` chunkserver locations), and the client works out which of those chunks actually overlap the requested range. 
 
 For each needed chunk, in order, the client does not pick a replica ahead of time: it tries the replicas one at a time, in the order the nameserver listed them, until one of them actually hands back a good copy of the chunk:
 ```python
@@ -273,13 +273,13 @@ def process_read_request(file_index):
 
     return {'status': 'ok'}, chunk          # only a chunk that passes both checks is sent back
 ```
-A chunkserver that fails either check replies `nok` instead of the bytes, which is exactly what sends the client's loop above on to the next replica for that same chunk. A single bad or unreachable replica never fails the read outright, as long as at least one of its siblings still has a good copy. It is oonly when every replica of a chunk fails that the client gives up on the whole read: a `RuntimeError` above is caught further up in `send_read`, which deletes the partial output file rather than leaving a truncated one behind.
+A chunkserver that fails either check replies `nok` instead of the bytes, which is exactly what sends the client's loop above on to the next replica for that same chunk. A single bad or unreachable replica never fails the read outright, as long as at least one of its siblings still has a good copy. It is only when every replica of a chunk fails that the client gives up on the whole read: a `RuntimeError` above is caught further up in `send_read`, which deletes the partial output file rather than leaving a truncated one behind.
 
 Once a chunk is retrieved, the client trims it to the requested byte range (the full chunk in the middle of the range, only the tail of the first chunk and the head of the last one at the edges), appends it to the output file, frees it, and moves on to the next chunk, until every needed chunk has been fetched and the requested range is fully reassembled on disk.
 
 == Handling exceptions
 
-Exception handling might be the weakest part of the project. Python does not declare which exceptions a function may raise, and threads and sockets can fail at almost any call, so we concentrated on the failure points below and tested each of them. This was all the more important since we have manipulated unstable objects such as threads and sockets.
+Exception handling might be the weakest part of the project. Python does not declare which exceptions a function may raise, and threads and sockets can fail at almost any call, so we concentrated on the three failure points below. This was all the more important since we have manipulated unstable objects such as threads and sockets.
 
 We could notice mainly three scenarios when exception handling can be well managed: 
 - For socket instance handling: we have used the structure `with self.socket as sock:`

@@ -2,3 +2,5 @@
 *.txt
 *.pyc
 __pycache__/
+mini-dfs/
+report/

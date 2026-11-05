@@ -7,7 +7,8 @@ The chunk layer scales the way GFS's does: storage capacity and write bandwidth 
 
 - Metadata is not persisted: the nameserver keeps its entire file-ID-to-chunk lookup table (`self.files`) as a plain in-memory `dict`. If the nameserver process dies, every chunk byte on every chunkserver becomes unreachable, even though the data itself is untouched, since there is no operation log or checkpoint to replay, unlike GFS's master.
 - No failure detection: there is no heartbeat between the nameserver and the chunkservers; a chunkserver that silently dies is only noticed on the next request that happens to target it, and nothing re-replicates the copies it was holding.
-- The metadata path is serial (see Performance): querying $N$ chunkservers for free space costs $N$ sequential round trips today, so adding chunkservers to gain write throughput currently backfires.
+- The metadata path is serial: getall_storage queries the N chunkservers one after another, so its cost grows linearly with N. We have not measured how much this costs in practice.
+
 
 None of these limitations is minor for a production system — persistence and failure
 recovery are among the parts GFS spends the most effort on — but each one sits in a
